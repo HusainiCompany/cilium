@@ -4,20 +4,20 @@
 #include <bpf/ctx/skb.h>
 #include "common.h"
 
-#define ENABLE_IPV4
-#define ENABLE_IPV6
-#define ENABLE_NODEPORT
-#define ENABLE_DSR
-#define ENABLE_DSR_BYUSER
+#define ENABLE_IPV4 1
+#define ENABLE_IPV6 1
 #define DSR_ENCAP_MODE DSR_ENCAP_IPIP
-#define DSR_ENCAP_IPIP 1
 
 #include "lib/bpf_host.h"
 
 ASSIGN_CONFIG(bool, enable_endpoint_routes, true)
+ASSIGN_CONFIG(struct dsr_config, dsr_cfg, { .enable = true, .enable_by_user = true })
 
 ASSIGN_CONFIG(__u32, encap4_ifindex, 42)
 ASSIGN_CONFIG(__u32, encap6_ifindex, 42)
+
+ASSIGN_CONFIG(bool, enable_ipv4, true)
+ASSIGN_CONFIG(bool, enable_nodeport, true)
 
 CHECK(PROG_TYPE, "test_nodeport_uses_dsr_ipv4_with_flag")
 int test_nodeport_uses_dsr_ipv4_with_flag(__maybe_unused struct __ctx_buff *ctx)

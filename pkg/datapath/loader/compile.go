@@ -12,15 +12,16 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
 
-	"github.com/cilium/cilium/pkg/command/exec"
 	"github.com/cilium/cilium/pkg/datapath/linux/probes"
 	"github.com/cilium/cilium/pkg/datapath/loader/types"
+	"github.com/cilium/cilium/pkg/defaults"
 	"github.com/cilium/cilium/pkg/lock"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/option"
@@ -82,6 +83,8 @@ type progInfo struct {
 	OutputType outputType
 	// Options are passed directly to LLVM as individual parameters
 	Options []string
+	// Reusable skips the compile when the manifest shows the object came from the same inputs
+	Reusable bool
 }
 
 func (pi *progInfo) AbsoluteOutput(dir *directoryInfo) string {
@@ -113,7 +116,8 @@ var (
 		"-Wimplicit-fallthrough"}
 
 	// testIncludes allows the unit tests to inject additional include
-	// paths into the compile command at test time. It is usually nil.
+	// paths and defines into the compile command at test time. It is
+	// usually nil.
 	testIncludes []string
 
 	epProg = &progInfo{
@@ -146,6 +150,20 @@ func getBPFCPU(logger *slog.Logger) string {
 	return nameBPFCPU
 }
 
+func getCompilerVersion(ctx context.Context) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, defaults.ExecTimeout)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, compiler, "--version").CombinedOutput()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		err = ctxErr
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get %s version: %w: %s", compiler, err, bytes.TrimSpace(out))
+	}
+	return out, nil
+}
+
 func pidFromProcess(proc *os.Process) string {
 	result := "not-started"
 	if proc != nil {
@@ -158,6 +176,10 @@ func pidFromProcess(proc *os.Process) string {
 //
 // May output assembly or source code after prepocessing.
 func compile(ctx context.Context, logger *slog.Logger, prog *progInfo, dir *directoryInfo) (string, error) {
+	// Bound each clang run by its own ExecTimeout.
+	ctx, cancel := context.WithTimeout(ctx, defaults.ExecTimeout)
+	defer cancel()
+
 	compileArgs := append(testIncludes,
 		fmt.Sprintf("-I%s", path.Join(dir.Runtime, "globals")),
 		fmt.Sprintf("-I%s", dir.State),
@@ -184,19 +206,35 @@ func compile(ctx context.Context, logger *slog.Logger, prog *progInfo, dir *dire
 		"-o", "-", // Always output to stdout
 	)
 
+	outputPath := prog.AbsoluteOutput(dir)
+	var digest string
+	if prog.Reusable {
+		var err error
+		if digest, err = inputsDigest(ctx, logger, dir.Library, compileArgs); err != nil {
+			logger.Warn("Unable to digest compile inputs",
+				logfields.Error, err,
+				logfields.Output, prog.Output,
+			)
+		} else if manifestMatches(outputPath, digest) {
+			logger.Info("Reusing compiled BPF object", logfields.Output, prog.Output)
+			return outputPath, nil
+		}
+	}
+
 	logger.Debug(
 		"Launching compiler",
 		logfields.Target, compiler,
 		logfields.Args, compileArgs,
 	)
 
-	compileCmd, cancelCompile := exec.WithCancel(ctx, compiler, compileArgs...)
-	defer cancelCompile()
+	compileCmd := exec.CommandContext(ctx, compiler, compileArgs...)
 
-	output, err := os.Create(prog.AbsoluteOutput(dir))
+	// Write to a temporary file so that a killed compiler leaves no partial object.
+	output, err := os.Create(outputPath + ".tmp")
 	if err != nil {
 		return "", err
 	}
+	defer os.Remove(output.Name())
 	defer output.Close()
 	compileCmd.Stdout = output
 
@@ -240,12 +278,26 @@ func compile(ctx context.Context, logger *slog.Logger, prog *progInfo, dir *dire
 		logger.Debug(
 			"Compilation had peak RSS",
 			logfields.CompilerPID, compileCmd.Process.Pid,
-			logfields.Output, output.Name(),
-			logfields.RssBytes, usage.Maxrss,
+			logfields.Output, outputPath,
+			logfields.RssKiB, usage.Maxrss,
 		)
 	}
 
-	return output.Name(), nil
+	if err := output.Sync(); err != nil {
+		return "", err
+	}
+	if err := os.Rename(output.Name(), outputPath); err != nil {
+		return "", err
+	}
+	if digest != "" {
+		if err := writeManifest(outputPath, digest); err != nil {
+			logger.Warn("Unable to record BPF object inputs",
+				logfields.Error, err,
+				logfields.Output, prog.Output,
+			)
+		}
+	}
+	return outputPath, nil
 }
 
 // compileDatapath invokes the compiler and linker to create all state files for
@@ -258,8 +310,7 @@ func compile(ctx context.Context, logger *slog.Logger, prog *progInfo, dir *dire
 func compileDatapath(ctx context.Context, logger *slog.Logger, dirs *directoryInfo, isHost bool) error {
 	scopedLog := logger.With(logfields.Debug, true)
 
-	versionCmd := exec.CommandContext(ctx, compiler, "--version")
-	compilerVersion, err := versionCmd.CombinedOutput(scopedLog, true)
+	compilerVersion, err := getCompilerVersion(ctx)
 	if err != nil {
 		return err
 	}
@@ -317,6 +368,7 @@ func compileWithOptions(ctx context.Context, logger *slog.Logger, src string, ou
 		Options:    opts,
 		Output:     out,
 		OutputType: outputObject,
+		Reusable:   true,
 	}
 	dirs := directoryInfo{
 		Library: option.Config.BpfDir,
@@ -343,8 +395,7 @@ func compileOverlay(ctx context.Context, logger *slog.Logger) error {
 	}
 	scopedLog := logger.With(logfields.Debug, true)
 
-	versionCmd := exec.CommandContext(ctx, compiler, "--version")
-	compilerVersion, err := versionCmd.CombinedOutput(scopedLog, true)
+	compilerVersion, err := getCompilerVersion(ctx)
 	if err != nil {
 		return err
 	}
@@ -357,6 +408,7 @@ func compileOverlay(ctx context.Context, logger *slog.Logger) error {
 		Source:     overlayProg,
 		Output:     overlayObj,
 		OutputType: outputObject,
+		Reusable:   true,
 	}
 	// Write out assembly and preprocessing files for debugging purposes
 	if _, err := compile(ctx, logger, prog, dirs); err != nil {
@@ -379,8 +431,7 @@ func compileWireguard(ctx context.Context, logger *slog.Logger) (err error) {
 	}
 	scopedLog := logger.With(logfields.Debug, true)
 
-	versionCmd := exec.CommandContext(ctx, compiler, "--version")
-	compilerVersion, err := versionCmd.CombinedOutput(scopedLog, true)
+	compilerVersion, err := getCompilerVersion(ctx)
 	if err != nil {
 		return err
 	}
@@ -392,6 +443,7 @@ func compileWireguard(ctx context.Context, logger *slog.Logger) (err error) {
 		Source:     wireguardProg,
 		Output:     wireguardObj,
 		OutputType: outputObject,
+		Reusable:   true,
 	}
 	// Write out assembly and preprocessing files for debugging purposes
 	if _, err := compile(ctx, logger, prog, dirs); err != nil {

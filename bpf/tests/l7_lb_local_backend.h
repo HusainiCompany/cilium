@@ -7,10 +7,8 @@
 #include "pktgen.h"
 
 /* Enable code paths under test */
-#define ENABLE_IPV4
-#define ENABLE_IPV6
-#define ENABLE_NODEPORT
-#define ENABLE_L7_LB		1
+#define ENABLE_IPV4 1
+#define ENABLE_IPV6 1
 
 /* Needed variables for the setup */
 #define CLIENT_IP		v4_pod_one
@@ -64,22 +62,12 @@ mock_tail_call_dynamic(struct __ctx_buff *ctx __maybe_unused,
 # include "lib/bpf_lxc.h"
 #include "lib/policy.h"
 
-/* BPF_PROG_TEST_RUN are executed with `ctx->ifindex = 1` (loopback device) as in
- * the kernel `bpf_prog_test_run_skb()` function.
- * (see https://github.com/torvalds/linux/blob/0257f64bdac7fdca30fa3cae0df8b9ecbec7733a/net/bpf/test_run.c#L991)
- * To simulate the expected behavior of the code under test, we will set the
- * cilium_host_ifindex accordingly, given we cannot change ctx->ifindex.
- */
-#ifdef ENABLE_ROUTING
-/* We are tail calling from cilium_host */
-ASSIGN_CONFIG(__u32, cilium_host_ifindex, 1)
-#else
-/* We are tail calling from bpf_lxc, let's change cilium_host ifindex */
-ASSIGN_CONFIG(__u32, cilium_host_ifindex, 2)
-#endif
-
 ASSIGN_CONFIG(__u32, cilium_net_ifindex, 10)
 ASSIGN_CONFIG(__u32, interface_ifindex, 12)
+
+ASSIGN_CONFIG(bool, enable_ipv4, true)
+ASSIGN_CONFIG(bool, enable_l7_lb, true)
+ASSIGN_CONFIG(bool, enable_nodeport, true)
 
 /* Test that a packet received from a L7LB for a local backend gets correctly handled:
  * - in case of per-endpoint routes disabled, packet tail calls from
@@ -134,13 +122,12 @@ int l7_lb_local_backend_v4_check(const struct __ctx_buff *ctx)
 
 	status_code = data;
 
-#ifdef ENABLE_ROUTING
-	assert(*status_code == CTX_ACT_OK);
-#else
-	assert(*status_code == CTX_ACT_REDIRECT);
-
-	assert(redirect_ifindex == ctx_get_ifindex(ctx));
-#endif
+	if (CONFIG(enable_bpf_routing)) {
+		assert(*status_code == CTX_ACT_OK);
+	} else {
+		assert(*status_code == CTX_ACT_REDIRECT);
+		assert(redirect_ifindex == ctx_get_ifindex(ctx));
+	}
 
 	test_finish();
 }
@@ -191,13 +178,12 @@ int l7_lb_local_backend_v6_check(const struct __ctx_buff *ctx)
 
 	status_code = data;
 
-#ifdef ENABLE_ROUTING
-	assert(*status_code == CTX_ACT_OK);
-#else
-	assert(*status_code == CTX_ACT_REDIRECT);
-
-	assert(redirect_ifindex == ctx_get_ifindex(ctx));
-#endif
+	if (CONFIG(enable_bpf_routing)) {
+		assert(*status_code == CTX_ACT_OK);
+	} else {
+		assert(*status_code == CTX_ACT_REDIRECT);
+		assert(redirect_ifindex == ctx_get_ifindex(ctx));
+	}
 
 	test_finish();
 }

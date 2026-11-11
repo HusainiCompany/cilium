@@ -11,9 +11,9 @@ cilium-operator-aws hive [flags]
 ### Options
 
 ```
+      --auto-create-cilium-resource-ip-pools stringToString        Automatically create CiliumResourceIPPool resources on startup. Specify pools in the form of <pool>=ipv4-cidrs:<cidr>,[<cidr>...];ipv4-mask-size:<size>[;allow-first-ip:<bool>][;allow-last-ip:<bool>] (multiple pools can also be passed by repeating the CLI flag) (default [])
       --aws-enable-prefix-delegation                               Allows operator to allocate prefixes to ENIs instead of individual IP addresses
       --aws-max-results-per-call int32                             Maximum results per AWS API call for DescribeNetworkInterfaces, DescribeSecurityGroups and GetSecurityGroupsForVpc. Set to 0 to let AWS determine optimal page size (default). If set to 0 and AWS returns OperationNotPermitted errors, automatically switches to 1000 for all future requests
-      --aws-release-excess-ips                                     Enable releasing excess free IP addresses from AWS ENI.
       --bgp-router-id-allocation-ip-pool string                    IP pool to allocate the BGP router-id from when the mode is 'ip-pool'
       --bgp-router-id-allocation-mode string                       BGP router-id allocation mode. Currently supported values: 'default' or 'ip-pool' (default "default")
       --bgp-secrets-namespace string                               Kubernetes namespace to get BGP control plane secrets from
@@ -55,7 +55,9 @@ cilium-operator-aws hive [flags]
       --enable-k8s-api-discovery                                   Enable discovery of Kubernetes API groups and resources with the discovery API
       --enable-lb-ipam                                             Enable LB IPAM (default true)
       --enable-metrics                                             Enable Prometheus metrics
-      --enable-network-driver                                      enable network driver to assign interfaces via Dynamic Resource Allocation
+      --enable-network-driver                                      Enable the Cilium Network Driver to assign interfaces via Dynamic Resource Allocation
+      --enable-network-driver-ipv4                                 Enable IPv4 address assignment for Cilium Network Driver resources (default true)
+      --enable-network-driver-ipv6                                 Enable IPv6 address assignment for Cilium Network Driver resources
       --enable-node-ipam                                           Enable Node IPAM
       --enable-policy-secrets-sync                                 Enables fan-in TLS secrets sync from multiple namespaces to singular namespace (specified by policy-secrets-namespace flag)
       --enable-wireguard                                           Enable WireGuard
@@ -67,6 +69,7 @@ cilium-operator-aws hive [flags]
       --excess-ip-release-delay int                                Number of seconds operator would wait before it releases an IP previously marked as excess (default 180)
       --gateway-api-hostnetwork-enabled                            Exposes Gateway listeners on the host network.
       --gateway-api-hostnetwork-nodelabelselector string           Label selector that matches the nodes where the gateway listeners should be exposed. It's a list of comma-separated key-value label pairs. e.g. 'kubernetes.io/os=linux,kubernetes.io/hostname=kind-worker'
+      --gateway-api-inference-extension-enabled                    Enables the use Gateway API Inference Extension
       --gateway-api-secrets-namespace string                       Namespace having tls secrets used by CEC for Gateway API (default "cilium-secrets")
       --gateway-api-service-externaltrafficpolicy string           Kubernetes LoadBalancer Service externalTrafficPolicy for all Gateway instances. (default "Cluster")
       --gateway-api-use-remote-address                             Use the immediate client's IP address as the origin client's IP address (default true)
@@ -95,6 +98,7 @@ cilium-operator-aws hive [flags]
       --ingress-secrets-namespace string                           Namespace having tls secrets used by Ingress and CEC. (default "cilium-secrets")
       --ingress-shared-lb-service-name string                      Name of shared LB service name for Ingress. (default "cilium-ingress")
       --ingress-use-remote-address                                 Use the immediate client's IP address as the origin client's IP address (default true)
+      --ipam-release-excess-ips                                    Enable releasing excess free IP addresses from cloud provider interfaces
       --k8s-api-server-urls strings                                Kubernetes API server URLs
       --k8s-client-connection-keep-alive duration                  Configures the keep alive duration of K8s client connections. K8 client is disabled if the value is set to 0 (default 30s)
       --k8s-client-connection-timeout duration                     Configures the timeout of K8s client connections. K8s client is disabled if the value is set to 0 (default 30s)

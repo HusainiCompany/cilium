@@ -15,6 +15,9 @@ on:
       SHA:
         description: "SHA under test (head of the PR branch)."
         required: true
+      base-SHA:
+        description: "SHA of the base branch (target branch of the PR)."
+        required: false
       num-test-nodes:
         description: "Number of test nodes to create"
         required: false
@@ -63,11 +66,11 @@ concurrency:
 
 env:
   # renovate: datasource=github-releases depName=eksctl-io/eksctl
-  eksctl_version: v0.230.0
+  eksctl_version: v0.231.0
   # renovate: datasource=github-releases depName=kubernetes/kubernetes
-  kubectl_version: v1.37.0
+  kubectl_version: v1.37.2
   # renovate: datasource=docker depName=google/cloud-sdk
-  gcloud_version: 585.0.0
+  gcloud_version: 592.0.0
 
   test_name: l7-perf
   cluster_name: ${{ github.run_id }}-${{ github.run_attempt }}
@@ -77,7 +80,7 @@ jobs:
   echo-inputs:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     name: Echo Workflow Dispatch Inputs
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Echo Workflow Dispatch Inputs
         run: |
@@ -85,7 +88,7 @@ jobs:
 
   commit-status-start:
     name: Commit Status Start
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Set initial commit status
         uses: cilium/actions/set-commit-status@687b48a0547e534dd7270d5069a5ab7967c0e907 # main
@@ -104,7 +107,7 @@ jobs:
       pull-requests: read
       # To be able to set commit status
       statuses: write
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     name: Install and Perf Test
     timeout-minutes: 60
     strategy:
@@ -114,6 +117,10 @@ jobs:
           - benchmark
     steps:
       - name: Set commit status to pending
+        # commit-status-start does not re-run, so this is only needed on a re-run. It's ok
+        # to continue on error since the check is reported at the end of the test.
+        if: ${{ github.run_attempt != '1' }}
+        continue-on-error: true
         uses: cilium/actions/set-commit-status@687b48a0547e534dd7270d5069a5ab7967c0e907 # main
         with:
           sha: ${{ inputs.SHA || github.sha }}
@@ -247,7 +254,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # renovate: datasource=golang-version depName=go
-          go-version: 1.27.1
+          go-version: 1.27.3
 
       - name: Setup gcloud credentials
         uses: google-github-actions/auth@12060449e87204eca501a11f2f7f1483024afff0 # v3.0.0 + google-github-actions/auth#532
@@ -278,7 +285,7 @@ jobs:
           rm "eksctl_$(uname -s)_amd64.tar.gz"
 
       - name: Set up AWS CLI credentials
-        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_PR_ASSUME_ROLE }}
           aws-region: ${{ steps.vars.outputs.eks_region }}
@@ -335,7 +342,7 @@ jobs:
             --docker-password="${{ secrets.DOCKER_READ_PASSWORD }}"
 
       - name: Install Cilium CLI
-        uses: cilium/cilium-cli@c5e42236c7d90bd50e7975ac587f77782666a0aa # v0.20.0
+        uses: cilium/cilium-cli@1ac7fa66909e3730ab3869c8ba7aa7d68f0197fd # v0.20.2
         with:
           skip-build: ${{ env.CILIUM_CLI_SKIP_BUILD }}
           image-repo: ${{ env.CILIUM_CLI_IMAGE_REPO }}
@@ -503,7 +510,7 @@ jobs:
 
       - name: Upload sysdump
         if: ${{ !success() && steps.install-cilium.outcome != 'skipped' && steps.install-cilium.outcome != 'cancelled' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cilium-sysdump-${{ matrix.test_type }}-${{ github.run_attempt }}
           path: cilium-sysdump-final.zip
@@ -532,7 +539,7 @@ jobs:
       # Refresh credentials
       - name: Set up AWS CLI credentials
         if:  ${{ always() && steps.deploy-cluster.outcome != 'skipped' }}
-        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_PR_ASSUME_ROLE }}
           aws-region: ${{ steps.vars.outputs.eks_region }}

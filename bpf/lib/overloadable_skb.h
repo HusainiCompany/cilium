@@ -77,32 +77,29 @@ neigh_resolver_available(void)
 }
 
 static __always_inline __maybe_unused void
-ctx_skip_nodeport_clear(struct __sk_buff *ctx __maybe_unused)
+ctx_skip_nodeport_clear(struct __sk_buff *ctx)
 {
-#ifdef ENABLE_NODEPORT
-	ctx->tc_index &= ~TC_INDEX_F_SKIP_NODEPORT;
-#endif
+	if (NODEPORT_ENABLED)
+		ctx->tc_index &= ~TC_INDEX_F_SKIP_NODEPORT;
 }
 
 static __always_inline __maybe_unused void
-ctx_skip_nodeport_set(struct __sk_buff *ctx __maybe_unused)
+ctx_skip_nodeport_set(struct __sk_buff *ctx)
 {
-#ifdef ENABLE_NODEPORT
-	ctx->tc_index |= TC_INDEX_F_SKIP_NODEPORT;
-#endif
+	if (NODEPORT_ENABLED)
+		ctx->tc_index |= TC_INDEX_F_SKIP_NODEPORT;
 }
 
 static __always_inline __maybe_unused bool
-ctx_skip_nodeport(struct __sk_buff *ctx __maybe_unused)
+ctx_skip_nodeport(struct __sk_buff *ctx)
 {
-#ifdef ENABLE_NODEPORT
+	if (!NODEPORT_ENABLED)
+		return true;
+
 	volatile __u32 tc_index = ctx->tc_index;
 
 	ctx->tc_index &= ~TC_INDEX_F_SKIP_NODEPORT;
 	return tc_index & TC_INDEX_F_SKIP_NODEPORT;
-#else
-	return true;
-#endif
 }
 
 static __always_inline __maybe_unused __u32 ctx_get_xfer(struct __sk_buff *ctx,
@@ -145,7 +142,7 @@ static __always_inline bool ctx_snat_done(const struct __sk_buff *ctx)
 
 static __always_inline bool ctx_is_overlay(const struct __sk_buff *ctx)
 {
-	if (!is_defined(HAVE_ENCAP))
+	if (!HAVE_ENCAP)
 		return false;
 
 	return (ctx->mark & MARK_MAGIC_HOST_MASK) == MARK_MAGIC_OVERLAY;
@@ -153,7 +150,7 @@ static __always_inline bool ctx_is_overlay(const struct __sk_buff *ctx)
 
 static __always_inline bool ctx_is_encrypt(const struct __sk_buff *ctx)
 {
-	if (!is_defined(ENABLE_WIREGUARD) && !is_defined(ENABLE_IPSEC))
+	if (!CONFIG(enable_wireguard) && !CONFIG(enable_ipsec))
 		return false;
 
 	return (ctx->mark & MARK_MAGIC_HOST_MASK) == MARK_MAGIC_ENCRYPT;
@@ -161,20 +158,17 @@ static __always_inline bool ctx_is_encrypt(const struct __sk_buff *ctx)
 
 static __always_inline bool ctx_is_decrypt(const struct __sk_buff *ctx)
 {
-	if (!is_defined(ENABLE_WIREGUARD) && !is_defined(ENABLE_IPSEC))
+	if (!CONFIG(enable_wireguard) && !CONFIG(enable_ipsec))
 		return false;
 
 	return (ctx->mark & MARK_MAGIC_HOST_MASK) == MARK_MAGIC_DECRYPT;
 }
 
-#ifdef ENABLE_EGRESS_GATEWAY_COMMON
 static __always_inline bool ctx_egw_done(const struct __sk_buff *ctx)
 {
 	return (ctx->mark & MARK_MAGIC_HOST_MASK) == MARK_MAGIC_EGW_DONE;
 }
-#endif /* ENABLE_EGRESS_GATEWAY_COMMON */
 
-#ifdef HAVE_ENCAP
 static __always_inline __maybe_unused int
 ctx_set_encap_info(struct __sk_buff *ctx, struct bpf_tunnel_key *key,
 		   __u32 key_size, void *opt, __u32 opt_len, __u32 flags)
@@ -236,4 +230,3 @@ ctx_set_encap_info6(struct __sk_buff *ctx, const union v6addr *tunnel_endpoint,
 	return ctx_set_encap_info(ctx, &key, key_size, opt, opt_len,
 				  BPF_F_TUNINFO_IPV6);
 }
-#endif /* HAVE_ENCAP */

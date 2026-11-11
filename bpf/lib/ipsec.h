@@ -9,6 +9,7 @@
 #include <linux/ip.h>
 
 #include "lib/common.h"
+#include "lib/config.h"
 #include "lib/encrypt.h"
 #include "lib/eps.h"
 #include "lib/ipv4.h"
@@ -34,7 +35,9 @@ struct {
 
 static __always_inline __u8 get_min_encrypt_key(__u8 peer_key __maybe_unused)
 {
-#ifdef ENABLE_IPSEC
+	if (!CONFIG(enable_ipsec))
+		return 0;
+
 	__u8 local_key = 0;
 	__u32 encrypt_key = 0;
 	const struct encrypt_config *cfg;
@@ -57,12 +60,8 @@ static __always_inline __u8 get_min_encrypt_key(__u8 peer_key __maybe_unused)
 	if (local_key == MAX_KEY_INDEX)
 		return peer_key == 1 ? local_key : peer_key;
 	return local_key < peer_key ? local_key : peer_key;
-#else
-	return 0;
-#endif /* ENABLE_IPSEC */
 }
 
-#ifdef ENABLE_IPSEC
 /**
  * or_encrypt_key - mask and shift key into encryption format
  */
@@ -113,7 +112,7 @@ static __always_inline int
 do_decrypt(struct __ctx_buff *ctx, __be16 proto)
 {
 	struct ipv6hdr __maybe_unused *ip6;
-	struct iphdr __maybe_unused *ip4;
+	struct iphdr *ip4;
 	void *data, *data_end;
 	__u8 protocol = 0;
 	__u16 node_id = 0;
@@ -131,8 +130,10 @@ do_decrypt(struct __ctx_buff *ctx, __be16 proto)
 			node_id = lookup_ip6_node_id((union v6addr *)&ip6->saddr);
 		break;
 #endif
-#ifdef ENABLE_IPV4
 	case bpf_htons(ETH_P_IP):
+		if (!is_defined(ENABLE_IPV4))
+			return CTX_ACT_OK;
+
 		if (!revalidate_data_pull(ctx, &data, &data_end, &ip4)) {
 			ctx->mark = 0;
 			return CTX_ACT_OK;
@@ -141,7 +142,6 @@ do_decrypt(struct __ctx_buff *ctx, __be16 proto)
 		if (!decrypted)
 			node_id = lookup_ip4_node_id(ip4->saddr);
 		break;
-#endif
 	default:
 		return CTX_ACT_OK;
 	}
@@ -179,20 +179,22 @@ ipsec_maybe_redirect_to_encrypt(struct __ctx_buff *ctx, __be16 proto,
 				__u32 src_sec_identity)
 {
 	struct remote_endpoint_info __maybe_unused fake_info = {0};
-	const struct remote_endpoint_info __maybe_unused *dst = NULL;
-	const struct remote_endpoint_info __maybe_unused *src = NULL;
-	void *data __maybe_unused, *data_end __maybe_unused;
-	struct iphdr __maybe_unused *ip4;
+	const struct remote_endpoint_info *dst = NULL;
+	const struct remote_endpoint_info *src = NULL;
+	void *data, *data_end;
+	struct iphdr *ip4;
 	struct ipv6hdr __maybe_unused *ip6;
 	int ret = 0;
-	union macaddr dst_mac = CONFIG(cilium_net_mac);
+	union macaddr dst_mac_addr = CONFIG(cilium_net_mac);
 
 	if (!eth_is_supported_ethertype(proto))
 		return DROP_UNSUPPORTED_L2;
 
 	switch (proto) {
-# ifdef ENABLE_IPV4
 	case bpf_htons(ETH_P_IP):
+		if (!is_defined(ENABLE_IPV4))
+			return CTX_ACT_OK;
+
 		if (!revalidate_data(ctx, &data, &data_end, &ip4))
 			return DROP_INVALID;
 
@@ -211,6 +213,11 @@ ipsec_maybe_redirect_to_encrypt(struct __ctx_buff *ctx, __be16 proto,
 			fake_info.tunnel_endpoint.ip4.be32 = ip4->daddr;
 			fake_info.flag_has_tunnel_ep = true;
 
+			const struct node_value *node_value = lookup_node(&fake_info);
+
+			if (node_value && node_value->id && !node_value->spi)
+				return CTX_ACT_OK;
+
 			dst = &fake_info;
 			src_sec_identity = get_identity(ctx);
 			goto overlay_encrypt;
@@ -227,7 +234,6 @@ ipsec_maybe_redirect_to_encrypt(struct __ctx_buff *ctx, __be16 proto,
 			src_sec_identity = src->sec_identity;
 		}
 		break;
-# endif /* ENABLE_IPV4 */
 
 # ifdef ENABLE_IPV6
 	case bpf_htons(ETH_P_IPV6):
@@ -243,6 +249,11 @@ ipsec_maybe_redirect_to_encrypt(struct __ctx_buff *ctx, __be16 proto,
 						 (union v6addr *)&ip6->daddr);
 			fake_info.flag_has_tunnel_ep = true;
 			fake_info.flag_ipv6_tunnel_ep = true;
+
+			const struct node_value *node_value = lookup_node(&fake_info);
+
+			if (node_value && node_value->id && !node_value->spi)
+				return CTX_ACT_OK;
 
 			dst = &fake_info;
 			src_sec_identity = get_identity(ctx);
@@ -294,7 +305,7 @@ overlay_encrypt:
 	 * the encrypted packet will be recirculated to the stack and the final
 	 * egress will occur toward the IPsec tunnel's destination.
 	 */
-	if (eth_store_daddr(ctx, (const __u8 *)&dst_mac, 0) != 0)
+	if (eth_store_daddr(ctx, (const __u8 *)&dst_mac_addr, 0) != 0)
 		return DROP_WRITE_ERROR;
 
 	ret = ctx_redirect(ctx, CONFIG(cilium_net_ifindex), BPF_F_INGRESS);
@@ -302,10 +313,3 @@ overlay_encrypt:
 		return DROP_INVALID;
 	return ret;
 }
-#else
-static __always_inline int
-do_decrypt(struct __ctx_buff __maybe_unused *ctx, __be16 __maybe_unused proto)
-{
-	return CTX_ACT_OK;
-}
-#endif /* ENABLE_IPSEC */

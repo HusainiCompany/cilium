@@ -12,6 +12,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/utils/ptr"
 	mcsapiv1beta1 "sigs.k8s.io/mcs-api/pkg/apis/v1beta1"
 
@@ -164,6 +165,12 @@ func (s *MCSAPIServiceSpec) validate() error {
 		*s.TrafficDistribution != corev1.ServiceTrafficDistributionPreferSameNode:
 		return fmt.Errorf("traffic distribution is unknown: %s", *s.TrafficDistribution)
 	}
+	if errs := validation.IsDNS1123Label(s.Namespace); len(errs) != 0 {
+		return fmt.Errorf("invalid namespace %q: %v", s.Namespace, errs)
+	}
+	if errs := validation.IsDNS1123Label(s.Name); len(errs) != 0 {
+		return fmt.Errorf("invalid service name %q: %v", s.Name, errs)
+	}
 	var ipv4Count, ipv6Count int
 	for _, ipFamily := range s.IPFamilies {
 		switch ipFamily {
@@ -177,6 +184,23 @@ func (s *MCSAPIServiceSpec) validate() error {
 	}
 	if ipv4Count > 1 || ipv6Count > 1 {
 		return errors.New("ipFamilies contain duplicate families")
+	}
+	for _, port := range s.Ports {
+		if len(port.Name) > 0 {
+			if errs := validation.IsDNS1123Label(port.Name); len(errs) != 0 {
+				return fmt.Errorf("invalid port name %q: %v", port.Name, errs)
+			}
+		}
+		switch port.Protocol {
+		case "", corev1.ProtocolTCP, corev1.ProtocolUDP, corev1.ProtocolSCTP:
+		default:
+			return fmt.Errorf("invalid port protocol %q", port.Protocol)
+		}
+		if port.AppProtocol != nil {
+			if errs := validation.IsQualifiedName(*port.AppProtocol); len(errs) != 0 {
+				return fmt.Errorf("invalid app protocol %q: %v", *port.AppProtocol, errs)
+			}
+		}
 	}
 
 	return nil

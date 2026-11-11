@@ -5,7 +5,6 @@ package linux
 
 import (
 	"fmt"
-	"net"
 	"net/netip"
 	"testing"
 
@@ -16,6 +15,7 @@ import (
 
 	fakeipsec "github.com/cilium/cilium/pkg/datapath/linux/ipsec/fake"
 	"github.com/cilium/cilium/pkg/idpool"
+	iputil "github.com/cilium/cilium/pkg/ip"
 	"github.com/cilium/cilium/pkg/kpr"
 	"github.com/cilium/cilium/pkg/maps/nodemap"
 	nodemapfake "github.com/cilium/cilium/pkg/maps/nodemap/fake"
@@ -30,12 +30,12 @@ type failOnceNodeMap struct {
 	fail bool
 }
 
-func (m *failOnceNodeMap) Update(ip netip.Addr, nodeID uint16, spi uint8) error {
+func (m *failOnceNodeMap) Update(ip netip.Addr, nodeID uint16, spi uint8, internalIP bool) error {
 	if m.fail {
 		m.fail = false
 		return fmt.Errorf("update failed")
 	}
-	return m.MapV2.Update(ip, nodeID, spi)
+	return m.MapV2.Update(ip, nodeID, spi, internalIP)
 }
 
 type failSecondNodeMap struct {
@@ -43,12 +43,12 @@ type failSecondNodeMap struct {
 	updates int
 }
 
-func (m *failSecondNodeMap) Update(ip netip.Addr, nodeID uint16, spi uint8) error {
+func (m *failSecondNodeMap) Update(ip netip.Addr, nodeID uint16, spi uint8, internalIP bool) error {
 	m.updates++
 	if m.updates == 2 {
 		return fmt.Errorf("update failed")
 	}
-	return m.MapV2.Update(ip, nodeID, spi)
+	return m.MapV2.Update(ip, nodeID, spi, internalIP)
 }
 
 func newTestLinuxNodeOps(t *testing.T) (*linuxNodeHandler, *linuxNodeOps) {
@@ -62,6 +62,9 @@ func newTestLinuxNodeOps(t *testing.T) (*linuxNodeHandler, *linuxNodeOps) {
 		fakeipsec.Config{},
 		node.NewTestLocalNodeStore(node.LocalNode{}),
 		newNodePolicy(),
+		nil,
+		nil,
+		nil,
 	)
 	return handler, &linuxNodeOps{handler: handler}
 }
@@ -76,7 +79,7 @@ func TestLinuxNodeOpsUpdateAndDelete(t *testing.T) {
 		Cluster: "cluster-1",
 		IPAddresses: []nodeTypes.Address{{
 			Type: addressing.NodeInternalIP,
-			IP:   net.ParseIP("192.0.2.1"),
+			IP:   iputil.AddrFrom(netip.MustParseAddr("192.0.2.1")),
 		}},
 	}}
 
@@ -106,7 +109,7 @@ func TestLinuxNodeOpsRetriesFailedUpdate(t *testing.T) {
 		Cluster: "cluster-1",
 		IPAddresses: []nodeTypes.Address{{
 			Type: addressing.NodeInternalIP,
-			IP:   net.ParseIP("192.0.2.1"),
+			IP:   iputil.AddrFrom(netip.MustParseAddr("192.0.2.1")),
 		}},
 	}}
 
@@ -129,8 +132,8 @@ func TestLinuxNodeOpsSupersedesFailedUpdate(t *testing.T) {
 		Name:    "node-1",
 		Cluster: "cluster-1",
 		IPAddresses: []nodeTypes.Address{
-			{Type: addressing.NodeInternalIP, IP: net.ParseIP("192.0.2.1")},
-			{Type: addressing.NodeInternalIP, IP: net.ParseIP("192.0.2.2")},
+			{Type: addressing.NodeInternalIP, IP: iputil.AddrFrom(netip.MustParseAddr("192.0.2.1"))},
+			{Type: addressing.NodeInternalIP, IP: iputil.AddrFrom(netip.MustParseAddr("192.0.2.2"))},
 		},
 	}}
 	require.Error(t, ops.Update(t.Context(), nil, statedb.Revision(1), n))
@@ -142,7 +145,7 @@ func TestLinuxNodeOpsSupersedesFailedUpdate(t *testing.T) {
 		Cluster: "cluster-1",
 		IPAddresses: []nodeTypes.Address{{
 			Type: addressing.NodeInternalIP,
-			IP:   net.ParseIP("192.0.2.3"),
+			IP:   iputil.AddrFrom(netip.MustParseAddr("192.0.2.3")),
 		}},
 	}}
 	require.NoError(t, ops.Update(t.Context(), nil, statedb.Revision(2), n))

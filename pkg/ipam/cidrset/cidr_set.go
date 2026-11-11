@@ -146,6 +146,17 @@ func (s *CidrSet) IsFull() bool {
 	return s.unavailableCIDRs == s.maxCIDRs
 }
 
+// Capacity returns the number of CIDRs in the set, excluding reserved ones.
+func (s *CidrSet) Capacity() int {
+	s.Lock()
+	defer s.Unlock()
+	reserved := 0
+	for _, word := range s.reserved.Bits() {
+		reserved += bits.OnesCount(uint(word))
+	}
+	return s.maxCIDRs - reserved
+}
+
 // AllocateNext allocates the next free CIDR range. This will set the range
 // as occupied and return the allocated range.
 func (s *CidrSet) AllocateNext() (netip.Prefix, error) {
@@ -315,33 +326,35 @@ func countUnavailableCIDRs(used, reserved *big.Int) int {
 	return count
 }
 
-// SetReservedRanges replaces the ranges excluded from new allocations.
-func (s *CidrSet) SetReservedRanges(ranges []netipx.IPRange) error {
-	var reservedBitmap big.Int
+func (s *CidrSet) ComputeRangesToReserve(ranges []netipx.IPRange) (cidralloc.RangesToReserve, error) {
+	rangesToReserve := cidralloc.NewRangesToReserve()
+	toReserveBitmap := rangesToReserve.Bitmap()
 
 	for _, r := range ranges {
 		begin, err := s.getIndexForAddr(r.From())
 		if err != nil {
-			return err
+			return rangesToReserve, err
 		}
 
 		end, err := s.getIndexForAddr(r.To())
 		if err != nil {
-			return err
+			return rangesToReserve, err
 		}
 
 		for i := begin; i <= end; i++ {
-			reservedBitmap.SetBit(&reservedBitmap, i, 1)
+			toReserveBitmap.SetBit(toReserveBitmap, i, 1)
 		}
 	}
+	return rangesToReserve, nil
+}
 
+// SetReservedRanges replaces the ranges excluded from new allocations.
+func (s *CidrSet) SetReservedRanges(rangesToReserve cidralloc.RangesToReserve) {
 	s.Lock()
 	defer s.Unlock()
-
-	s.unavailableCIDRs = countUnavailableCIDRs(&s.used, &reservedBitmap)
-	s.reserved.Set(&reservedBitmap)
-
-	return nil
+	toReserveBitmap := rangesToReserve.Bitmap()
+	s.unavailableCIDRs = countUnavailableCIDRs(&s.used, toReserveBitmap)
+	s.reserved.Set(toReserveBitmap)
 }
 
 type ErrCIDRCollision struct {

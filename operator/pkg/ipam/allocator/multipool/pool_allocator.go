@@ -130,6 +130,8 @@ type PoolAllocator struct {
 
 	ipv4Enabled, ipv6Enabled bool
 
+	metrics *Metrics
+
 	mutex   lock.RWMutex
 	pools   map[string]cidrPool    // poolName -> pool
 	nodes   map[string]poolToCIDRs // nodeName -> pool -> cidrs
@@ -137,15 +139,45 @@ type PoolAllocator struct {
 	ready   bool
 }
 
-func NewPoolAllocator(logger *slog.Logger, enableIPv4, enableIPv6 bool) *PoolAllocator {
+func NewPoolAllocator(logger *slog.Logger, enableIPv4, enableIPv6 bool, metrics *Metrics) *PoolAllocator {
 	return &PoolAllocator{
 		logger:      logger,
 		ipv4Enabled: enableIPv4,
 		ipv6Enabled: enableIPv6,
+		metrics:     metrics,
 		pools:       map[string]cidrPool{},
 		nodes:       map[string]poolToCIDRs{},
 		orphans:     map[string]poolToCIDRs{},
 	}
+}
+
+// updatePoolMetricsLocked recomputes and emits the total-blocks gauge for a
+// single pool. The total only changes when a pool's CIDRs, mask or reserved
+// ranges change, so this is called from UpsertPool. Caller must hold p.mutex.
+func (p *PoolAllocator) updatePoolMetricsLocked(poolName string) {
+	if !p.metrics.enabled() {
+		return
+	}
+	pool, ok := p.pools[poolName]
+	if !ok {
+		p.metrics.deletePool(poolName)
+		return
+	}
+	if p.ipv4Enabled {
+		p.metrics.setPool(poolName, ipam.IPv4, totalBlocks(pool.v4))
+	}
+	if p.ipv6Enabled {
+		p.metrics.setPool(poolName, ipam.IPv6, totalBlocks(pool.v6))
+	}
+}
+
+// totalBlocks sums the CIDR-block capacity across a pool's family allocators.
+func totalBlocks(allocators []cidralloc.CIDRAllocator) int {
+	total := 0
+	for _, a := range allocators {
+		total += a.Capacity()
+	}
+	return total
 }
 
 func (p *PoolAllocator) RestoreFinished() {
@@ -217,11 +249,19 @@ func (p *PoolAllocator) reconcileOrphanCIDRs(pool string, v4, v6 []cidralloc.CID
 	return errors.Join(errs...)
 }
 
-func (p *PoolAllocator) updateCIDRSets(isV6 bool, cidrSets []cidralloc.CIDRAllocator, newCIDRs []netip.Prefix, maskSize int) ([]cidralloc.CIDRAllocator, error) {
+// nodePoolsCIDRsDeleter deletes CIDRs from node pools (see PoolAllocator.computeNewCIDRSets).
+type nodePoolsCIDRsDeleter func()
+
+// computeNewCIDRSets computes the new list of CIDRs based on the current ones and the new ones
+// requested by the user. Notice that deleted CIDRs are not removed from node pools, and must
+// explicitly be deleted by calling the returned nodePoolsCIDRsDeleter function.
+func (p *PoolAllocator) computeNewCIDRSets(isV6 bool, prevCIDRSets []cidralloc.CIDRAllocator, newCIDRs []netip.Prefix, maskSize int) ([]cidralloc.CIDRAllocator, nodePoolsCIDRsDeleter, error) {
+	cidrSets := slices.Clone(prevCIDRSets)
+
 	var newCIDRSets []cidralloc.CIDRAllocator
 	var alloc []string
 
-	// allocate new CIDR set for each CIDR not yet in the pool
+	// Allocate new CIDR set for each CIDR not yet in the pool.
 	for _, cidr := range newCIDRs {
 		if !hasCIDR(cidrSets, cidr) {
 			alloc = append(alloc, cidr.String())
@@ -231,18 +271,21 @@ func (p *PoolAllocator) updateCIDRSets(isV6 bool, cidrSets []cidralloc.CIDRAlloc
 		var err error
 		newCIDRSets, err = cidrset.NewCIDRSets(isV6, alloc, maskSize)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
 	var errs []error
 
-	// delete CIDR set for CIDRs not present in the new CIDRs
+	var nodePoolCIDRDeleterFns []func()
+
+	// Compute the list of CIDRs that must be deleted from node pools, because not contained in the
+	// new list of CIDRs.
 	for i, oldCIDR := range cidrSets {
 		if oldCIDR == nil {
 			continue
 		}
-		if exists := slices.ContainsFunc(newCIDRs, oldCIDR.IsClusterCIDR); exists {
+		if slices.ContainsFunc(newCIDRs, oldCIDR.IsClusterCIDR) {
 			continue
 		}
 
@@ -275,15 +318,24 @@ func (p *PoolAllocator) updateCIDRSets(isV6 bool, cidrSets []cidralloc.CIDRAlloc
 						logfields.PoolName, pool,
 						logfields.Node, node,
 					)
-					p.markOrphan(node, pool, cidr, allocatedCIDRSets.allowFirstIP, allocatedCIDRSets.allowLastIP)
-					delete(cidrs, cidr)
+					nodePoolCIDRDeleterFns = append(nodePoolCIDRDeleterFns, func() {
+						p.markOrphan(node, pool, cidr, allocatedCIDRSets.allowFirstIP, allocatedCIDRSets.allowLastIP)
+						delete(cidrs, cidr)
+					})
 				}
 			}
 		}
 	}
+
+	nodePoolsCIDRsDeleter := nodePoolsCIDRsDeleter(func() {
+		for _, nodePoolCIDRDeleterFn := range nodePoolCIDRDeleterFns {
+			nodePoolCIDRDeleterFn()
+		}
+	})
+
 	cidrSets = slices.DeleteFunc(cidrSets, func(a cidralloc.CIDRAllocator) bool { return a == nil })
 	cidrSets = append(cidrSets, newCIDRSets...)
-	return cidrSets, errors.Join(errs...)
+	return cidrSets, nodePoolsCIDRsDeleter, errors.Join(errs...)
 }
 
 func cidrPrefixes(cidrs []poolCIDRConfig) []netip.Prefix {
@@ -297,72 +349,103 @@ func cidrPrefixes(cidrs []poolCIDRConfig) []netip.Prefix {
 	return prefixes
 }
 
-func setReservedRanges(allocators []cidralloc.CIDRAllocator, cidrs []poolCIDRConfig) error {
+type rangesReservation struct {
+	allocator cidralloc.CIDRAllocator
+	ranges    cidralloc.RangesToReserve
+}
+
+// computeRangesToReserve computes, for each allocator, the ranges that must be reserved.
+func computeRangesToReserve(allocators []cidralloc.CIDRAllocator, cidrs []poolCIDRConfig) ([]rangesReservation, error) {
 	reservedRanges := make(map[netip.Prefix][]netipx.IPRange, len(cidrs))
 	for i := range cidrs {
 		cidrConfig := &cidrs[i]
 		reservedRanges[cidrConfig.cidr] = cidrConfig.reservedRanges
 	}
 
+	allocatorsRangesToReserve := make([]rangesReservation, 0, len(reservedRanges))
 	for i := range allocators {
 		prefix := allocators[i].Prefix()
-		if err := allocators[i].SetReservedRanges(reservedRanges[prefix]); err != nil {
-			return fmt.Errorf("failed to set reserved ranges for CIDR %s: %w", prefix, err)
+		rangesToReserve, err := allocators[i].ComputeRangesToReserve(reservedRanges[prefix])
+		if err != nil {
+			return nil, fmt.Errorf("failed to compute ranges to reserve for CIDR %s: %w", prefix, err)
 		}
+
+		allocatorsRangesToReserve = append(allocatorsRangesToReserve, rangesReservation{
+			allocator: allocators[i],
+			ranges:    rangesToReserve,
+		})
 	}
 
+	return allocatorsRangesToReserve, nil
+}
+
+func validateExistingPool(pool cidrPool, ipv4MaskSize, ipv6MaskSize int, options poolOptions) error {
+	if pool.v4MaskSize != ipv4MaskSize {
+		return fmt.Errorf("cannot change IPv4 mask size")
+	}
+	if pool.v6MaskSize != ipv6MaskSize {
+		return fmt.Errorf("cannot change IPv6 mask size")
+	}
+	if pool.allowFirstIP != options.allowFirstIP {
+		return fmt.Errorf("cannot change allowFirstIP")
+	}
+	if pool.allowLastIP != options.allowLastIP {
+		return fmt.Errorf("cannot change allowLastIP")
+	}
 	return nil
 }
 
 func (p *PoolAllocator) UpsertPool(poolName string, ipv4CIDRs []poolCIDRConfig, ipv4MaskSize int, ipv6CIDRs []poolCIDRConfig, ipv6MaskSize int, opts ...PoolOption) error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
+	defer p.updatePoolMetricsLocked(poolName)
 
 	var options poolOptions
 	for _, opt := range opts {
 		opt(&options)
 	}
 
+	var v4Prev []cidralloc.CIDRAllocator
+	var v6Prev []cidralloc.CIDRAllocator
+
 	pool, exists := p.pools[poolName]
-	if exists && ipv4MaskSize != pool.v4MaskSize {
-		return fmt.Errorf("cannot change IPv4 mask size in existing pool %q", poolName)
-	}
-	if exists && ipv6MaskSize != pool.v6MaskSize {
-		return fmt.Errorf("cannot change IPv6 mask size in existing pool %q", poolName)
-	}
-	if exists && options.allowFirstIP != pool.allowFirstIP {
-		return fmt.Errorf("cannot change allowFirstIP in existing pool %q", poolName)
-	}
-	if exists && options.allowLastIP != pool.allowLastIP {
-		return fmt.Errorf("cannot change allowLastIP in existing pool %q", poolName)
+	if exists {
+		if err := validateExistingPool(pool, ipv4MaskSize, ipv6MaskSize, options); err != nil {
+			return fmt.Errorf("validation failed for existing pool %q: %w", poolName, err)
+		}
+		v4Prev = pool.v4
+		v6Prev = pool.v6
 	}
 
 	ipv4Prefixes := cidrPrefixes(ipv4CIDRs)
 	ipv6Prefixes := cidrPrefixes(ipv6CIDRs)
 
-	var v4Prev []cidralloc.CIDRAllocator
-	if exists {
-		v4Prev = pool.v4
-	}
-	v4, err := p.updateCIDRSets(false, v4Prev, ipv4Prefixes, ipv4MaskSize)
+	v4, nodePoolsV4CIDRsDeleter, err := p.computeNewCIDRSets(false, v4Prev, ipv4Prefixes, ipv4MaskSize)
 	if err != nil {
 		return err
 	}
 
-	var v6Prev []cidralloc.CIDRAllocator
-	if exists {
-		v6Prev = pool.v6
-	}
-	v6, err := p.updateCIDRSets(true, v6Prev, ipv6Prefixes, ipv6MaskSize)
+	v6, nodePoolsV6CIDRsDeleter, err := p.computeNewCIDRSets(true, v6Prev, ipv6Prefixes, ipv6MaskSize)
 	if err != nil {
 		return err
 	}
 
-	if err := setReservedRanges(v4, ipv4CIDRs); err != nil {
+	v4RangesToReserve, err := computeRangesToReserve(v4, ipv4CIDRs)
+	if err != nil {
 		return err
 	}
-	if err := setReservedRanges(v6, ipv6CIDRs); err != nil {
+	v6RangesToReserve, err := computeRangesToReserve(v6, ipv6CIDRs)
+	if err != nil {
 		return err
+	}
+
+	nodePoolsV4CIDRsDeleter()
+	nodePoolsV6CIDRsDeleter()
+	for _, rangesToReserve := range v4RangesToReserve {
+		rangesToReserve.allocator.SetReservedRanges(rangesToReserve.ranges)
+	}
+	for _, rangesToReserve := range v6RangesToReserve {
+		rangesToReserve.allocator.SetReservedRanges(rangesToReserve.ranges)
 	}
 
 	p.pools[poolName] = cidrPool{
@@ -384,6 +467,7 @@ func (p *PoolAllocator) UpsertPool(poolName string, ipv4CIDRs []poolCIDRConfig, 
 func (p *PoolAllocator) DeletePool(poolName string) error {
 	p.mutex.Lock()
 	defer p.mutex.Unlock()
+	defer p.metrics.deletePool(poolName)
 
 	if _, exists := p.pools[poolName]; !exists {
 		return fmt.Errorf("pool %q requested for deletion doesn't exist", poolName)

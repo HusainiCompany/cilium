@@ -5,6 +5,7 @@ package bpf
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -22,6 +23,7 @@ import (
 	"golang.org/x/sys/unix"
 	"k8s.io/apimachinery/pkg/util/sets"
 
+	"github.com/cilium/cilium/pkg/datapath/linux/probes"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/testutils"
 )
@@ -80,7 +82,7 @@ func setup(tb testing.TB) *Map {
 	return testMap
 }
 
-func setupPerCPU(tb testing.TB) *Map {
+func setupPerCPU(tb testing.TB, mapType ebpf.MapType) *Map {
 	testutils.PrivilegedTest(tb)
 
 	CheckOrMountFS(hivetest.Logger(tb), "")
@@ -89,7 +91,7 @@ func setupPerCPU(tb testing.TB) *Map {
 	require.NoError(tb, err)
 
 	testMap := NewMap("cilium_test_percpu",
-		ebpf.PerCPUArray,
+		mapType,
 		&TestKey{},
 		&TestValue{},
 		3,
@@ -104,6 +106,15 @@ func setupPerCPU(tb testing.TB) *Map {
 	})
 
 	return testMap
+}
+
+// updatePerCPU sets value for key on the first CPU, leaving the others zeroed.
+func updatePerCPU(tb testing.TB, m *Map, key *TestKey, value *TestValue) {
+	tb.Helper()
+
+	m.lock.Lock()
+	defer m.lock.Unlock()
+	require.NoError(tb, m.m.Update(key, []any{value}, ebpf.UpdateAny))
 }
 
 var (
@@ -531,52 +542,131 @@ func TestPrivilegedDump(t *testing.T) {
 }
 
 func TestPrivilegedDumpPerCPU(t *testing.T) {
-	testMap := setupPerCPU(t)
+	for _, tc := range []struct {
+		name    string
+		mapType ebpf.MapType
+		// Expected dump right after populating the map, and after ClearAll().
+		// Array entries always exist, hash entries only once inserted.
+		populated, cleared map[string][]uint32
+	}{
+		{
+			name:    "array",
+			mapType: ebpf.PerCPUArray,
+			populated: map[string][]uint32{
+				"key=0": {205},
+				"key=1": {0},
+				"key=2": {206},
+			},
+			cleared: map[string][]uint32{
+				"key=0": {0},
+				"key=1": {0},
+				"key=2": {0},
+			},
+		},
+		{
+			name:    "hash",
+			mapType: ebpf.PerCPUHash,
+			populated: map[string][]uint32{
+				"key=0": {205},
+				"key=2": {206},
+			},
+			// ClearAll() reinitializes the entries to zero, it does not
+			// remove them.
+			cleared: map[string][]uint32{
+				"key=0": {0},
+				"key=2": {0},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testMap := setupPerCPU(t, tc.mapType)
 
-	key1 := &TestKey{Key: 0}
-	value1 := &TestValue{Value: 205}
-	key2 := &TestKey{Key: 2}
-	value2 := &TestValue{Value: 206}
+			updatePerCPU(t, testMap, &TestKey{Key: 0}, &TestValue{Value: 205})
+			updatePerCPU(t, testMap, &TestKey{Key: 2}, &TestValue{Value: 206})
 
-	func() {
-		testMap.lock.Lock()
-		defer testMap.lock.Unlock()
-		err := testMap.m.Update(key1, []any{value1}, ebpf.UpdateAny)
-		require.NoError(t, err)
-		err = testMap.m.Update(key2, []any{value1}, ebpf.UpdateAny)
-		require.NoError(t, err)
-		err = testMap.m.Update(key2, []any{value2}, ebpf.UpdateAny)
-		require.NoError(t, err)
-	}()
-
-	dump := map[string][]uint32{}
-	customCb := func(key MapKey, values any) {
-		var value uint32
-		for _, v := range *values.(*TestValues) {
-			if value == 0 && v.Value != 0 {
-				value = v.Value
-			} else if value != 0 {
-				require.Equal(t, uint32(0), v.Value)
+			dump := map[string][]uint32{}
+			customCb := func(key MapKey, values any) {
+				var value uint32
+				for _, v := range *values.(*TestValues) {
+					if value == 0 && v.Value != 0 {
+						value = v.Value
+					} else if value != 0 {
+						require.Equal(t, uint32(0), v.Value)
+					}
+				}
+				dump[key.String()] = append(dump[key.String()], value)
 			}
-		}
-		dump[key.String()] = append(dump[key.String()], value)
+			require.NoError(t, testMap.DumpPerCPUWithCallback(customCb))
+			require.Equal(t, tc.populated, dump)
+
+			require.NoError(t, testMap.ClearAll())
+
+			dump = map[string][]uint32{}
+			require.NoError(t, testMap.DumpPerCPUWithCallback(customCb))
+			require.Equal(t, tc.cleared, dump)
+		})
 	}
-	testMap.DumpPerCPUWithCallback(customCb)
-	require.Equal(t, map[string][]uint32{
-		"key=0": {205},
-		"key=1": {0},
-		"key=2": {206},
-	}, dump)
+}
 
-	require.NoError(t, testMap.ClearAll())
+func TestPrivilegedBasicManipulationPerCPU(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		mapType   ebpf.MapType
+		canDelete bool
+	}{
+		{"array", ebpf.PerCPUArray, false},
+		{"hash", ebpf.PerCPUHash, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			testMap := setupPerCPU(t, tc.mapType)
+			deleteFn := func(key MapKey) (bool, any, error) {
+				err := probes.HaveMapLookupAndDelete(tc.mapType)
+				switch {
+				case err == nil:
+					return testMap.LookupAndDelete(key)
+				case errors.Is(err, probes.ErrNotSupported):
+					v, _ := testMap.Lookup(key)
+					err = testMap.Delete(key)
+					return err == nil, v, err
+				}
+				t.Fatalf("unexpected error checking map type %s: %v", tc.mapType, err)
+				return false, nil, nil
+			}
 
-	dump = map[string][]uint32{}
-	testMap.DumpPerCPUWithCallback(customCb)
-	require.Equal(t, map[string][]uint32{
-		"key=0": {0},
-		"key=1": {0},
-		"key=2": {0},
-	}, dump)
+			updatePerCPU(t, testMap, &TestKey{Key: 0}, &TestValue{Value: 205})
+			updatePerCPU(t, testMap, &TestKey{Key: 2}, &TestValue{Value: 206})
+
+			values, err := testMap.Lookup(&TestKey{Key: 2})
+			require.NoError(t, err)
+			require.Contains(t, *values.(*TestValues), TestValue{Value: 206})
+
+			if !tc.canDelete {
+				ok, _, err := deleteFn(&TestKey{Key: 0})
+				require.Error(t, err)
+				require.False(t, ok)
+
+				require.Error(t, testMap.DeleteAll())
+				return
+			}
+
+			ok, values, err := deleteFn(&TestKey{Key: 0})
+			require.NoError(t, err)
+			require.True(t, ok)
+			require.Contains(t, *values.(*TestValues), TestValue{Value: 205})
+
+			// The entry is gone: deleting it again is not an error.
+			ok, values, err = deleteFn(&TestKey{Key: 0})
+			require.NoError(t, err)
+			require.False(t, ok)
+			require.Nil(t, values)
+
+			require.NoError(t, testMap.DeleteAll())
+
+			dump := map[string][]string{}
+			require.NoError(t, testMap.Dump(dump))
+			require.Empty(t, dump)
+		})
+	}
 }
 
 // TestPrivilegedDumpReliablyWithCallbackOverlapping attempts to test that DumpReliablyWithCallback
@@ -974,16 +1064,15 @@ func TestBatchIteratorTypes(t *testing.T) {
 		ebpf.Array,
 		&TestKey{},
 		&TestValue{}, 1, 0)
-	iter := NewBatchIterator[TestKey, TestValue](m)
-	iter.IterateAll(context.TODO())
-	assert.Error(t, iter.Err())
-	assert.NotNil(t, iter)
+	seq, errFn := BatchIterate[TestKey, TestValue](context.TODO(), m)
+	assert.NotNil(t, seq)
+	assert.Error(t, errFn())
 }
 
 func TestPrivilegedBatchIterator(t *testing.T) {
 	testutils.PrivilegedTest(t)
 
-	runTest := func(mapType ebpf.MapType, size, mapSize int, t *testing.T, opts ...BatchIteratorOpt[TestLPMKey, TestValue, *TestLPMKey, *TestValue]) {
+	runTest := func(mapType ebpf.MapType, size, mapSize int, t *testing.T, opts ...BatchOpt) {
 		makeKey := func(i int) MapKey {
 			// Note: We use a lpm key type as it is compatible with lpmtrie map tests
 			// and works fine for other tests.
@@ -1010,14 +1099,14 @@ func TestPrivilegedBatchIterator(t *testing.T) {
 		ks := sets.New[int]()
 		vs := sets.New[int]()
 
-		iter := NewBatchIterator[TestLPMKey, TestValue](m)
+		seq, errFn := BatchIterate[TestLPMKey, TestValue](context.TODO(), m, opts...)
 		count := 0
-		for k, v := range iter.IterateAll(context.TODO(), opts...) {
+		for k, v := range seq {
 			count++
 			ks.Insert(int(k.Key))
 			vs.Insert(int(v.Value))
 		}
-		require.NoError(t, iter.Err())
+		require.NoError(t, errFn())
 		assert.Equal(t, size, count)
 
 		for i := range int(size) {
@@ -1036,7 +1125,7 @@ func TestPrivilegedBatchIterator(t *testing.T) {
 	for _, test := range []struct {
 		mapSize int
 		size    int
-		opts    []BatchIteratorOpt[TestLPMKey, TestValue, *TestLPMKey, *TestValue]
+		opts    []BatchOpt
 		// LRU hash maps aren't totally safe to test like this, even if you're
 		// within the max map size number of elements, in practice the kernel
 		// will occasionally do a LRU eviction causing failures.
@@ -1052,8 +1141,8 @@ func TestPrivilegedBatchIterator(t *testing.T) {
 		{
 			size:    1 << 12,
 			mapSize: 1 << 13,
-			opts: []BatchIteratorOpt[TestLPMKey, TestValue, *TestLPMKey, *TestValue]{
-				WithMaxRetries[TestLPMKey, TestValue](13), WithStartingChunkSize[TestLPMKey, TestValue](1)},
+			opts: []BatchOpt{
+				WithMaxRetries(13), WithStartingChunkSize(1)},
 			unsafeLRU: true,
 		},
 		{
@@ -1063,8 +1152,8 @@ func TestPrivilegedBatchIterator(t *testing.T) {
 		{
 			size:    1 << 12,
 			mapSize: 1 << 12,
-			opts: []BatchIteratorOpt[TestLPMKey, TestValue, *TestLPMKey, *TestValue]{
-				WithMaxRetries[TestLPMKey, TestValue](1), WithStartingChunkSize[TestLPMKey, TestValue](1 << 13)},
+			opts: []BatchOpt{
+				WithMaxRetries(1), WithStartingChunkSize(1 << 13)},
 			unsafeLRU: true,
 		},
 	} {
@@ -1079,5 +1168,68 @@ func TestPrivilegedBatchIterator(t *testing.T) {
 				runTest(ebpf.LRUHash, test.size, test.mapSize, t, test.opts...)
 			})
 		}
+	}
+}
+
+func TestPrivilegedPerCPUBatchIterator(t *testing.T) {
+	testutils.PrivilegedTest(t)
+
+	runTest := func(mapType ebpf.MapType, flags uint32, size, mapSize int, t *testing.T) {
+		m := NewMap("cilium_test_percpu_batch",
+			mapType,
+			&TestKey{},
+			&TestValue{},
+			mapSize,
+			flags,
+		)
+		require.NoError(t, m.OpenOrCreate())
+		defer assert.NoError(t, m.UnpinIfExists())
+
+		func() {
+			m.lock.Lock()
+			defer m.lock.Unlock()
+			for i := range size {
+				key := &TestKey{Key: uint32(i)}
+				value := &TestValue{Value: uint32(i + 1)}
+				err := m.m.Update(key, []any{value}, ebpf.UpdateAny)
+				require.NoError(t, err)
+			}
+		}()
+
+		ks := sets.New[int]()
+		vs := sets.New[int]()
+
+		it, errFn := BatchIteratePerCPU[TestKey, TestValue](context.TODO(), m)
+		count := 0
+		for k, values := range it {
+			count++
+			ks.Insert(int(k.Key))
+			for _, v := range values {
+				if v.Value != 0 {
+					vs.Insert(int(v.Value))
+				}
+			}
+		}
+		require.NoError(t, errFn())
+		assert.Equal(t, size, count, "expected to iterate over %d keys, got %d", size, count)
+
+		for i := range size {
+			require.Contains(t, ks, i, "expect iterate to return key="+strconv.Itoa(i))
+			require.Contains(t, vs, i+1, "expect iterate to return val="+strconv.Itoa(i+1))
+		}
+	}
+
+	for _, test := range []struct {
+		name    string
+		mapType ebpf.MapType
+		flags   uint32
+	}{
+		{"percpuhash", ebpf.PerCPUHash, 0},
+		{"lrucpuhash", ebpf.LRUCPUHash, 0},
+		{"lrucpuhash-nocommonlru", ebpf.LRUCPUHash, unix.BPF_F_NO_COMMON_LRU},
+	} {
+		t.Run(fmt.Sprintf("%s size=10 mapSize=1024", test.name), func(t *testing.T) {
+			runTest(test.mapType, test.flags, 10, 1024, t)
+		})
 	}
 }

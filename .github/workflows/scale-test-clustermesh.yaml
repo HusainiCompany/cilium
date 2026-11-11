@@ -61,9 +61,9 @@ concurrency:
 
 env:
   # renovate: datasource=docker depName=google/cloud-sdk
-  gcloud_version: 585.0.0
+  gcloud_version: 592.0.0
   # renovate: datasource=git-refs depName=https://github.com/cilium/scaffolding branch=main
-  cmapisrv_mock_ref: 41c94fe0f0b471b5f31bdd2685c7a78223565126
+  cmapisrv_mock_ref: 961a49150326b7a74e1302d3505a86f7c1b248cc
 
   test_name: scale-clustermesh
   cluster_name: ${{ github.run_id }}-${{ github.run_attempt }}
@@ -73,7 +73,7 @@ jobs:
   echo-inputs:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     name: Echo Workflow Dispatch Inputs
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Echo Workflow Dispatch Inputs
         run: |
@@ -81,7 +81,7 @@ jobs:
 
   commit-status-start:
     name: Commit Status Start
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Set initial commit status
         uses: cilium/actions/set-commit-status@687b48a0547e534dd7270d5069a5ab7967c0e907 # main
@@ -89,13 +89,17 @@ jobs:
           sha: ${{ inputs.SHA || github.sha }}
 
   install-and-test:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     name: Install and Cluster Mesh Scale Test
     timeout-minutes: 60
     env:
       job_name: "Install and Cluster Mesh Scale Test"
     steps:
       - name: Set commit status to pending
+        # commit-status-start does not re-run, so this is only needed on a re-run. It's ok
+        # to continue on error since the check is reported at the end of the test.
+        if: ${{ github.run_attempt != '1' }}
+        continue-on-error: true
         uses: cilium/actions/set-commit-status@687b48a0547e534dd7270d5069a5ab7967c0e907 # main
         with:
           sha: ${{ inputs.SHA || github.sha }}
@@ -131,7 +135,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # renovate: datasource=golang-version depName=go
-          go-version: 1.27.1
+          go-version: 1.27.3
 
       - name: Install Kops
         uses: cilium/scale-tests-action/install-kops@529d919e01deb35642ba5c6ecdcbf2e2311cd3de # main
@@ -198,7 +202,7 @@ jobs:
             --docker-password="${{ secrets.DOCKER_READ_PASSWORD }}"
 
       - name: Install Cilium CLI
-        uses: cilium/cilium-cli@c5e42236c7d90bd50e7975ac587f77782666a0aa # v0.20.0
+        uses: cilium/cilium-cli@1ac7fa66909e3730ab3869c8ba7aa7d68f0197fd # v0.20.2
         with:
           skip-build: ${{ env.CILIUM_CLI_SKIP_BUILD }}
           image-repo: ${{ env.CILIUM_CLI_IMAGE_REPO }}

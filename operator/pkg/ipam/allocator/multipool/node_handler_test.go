@@ -98,7 +98,7 @@ type mockResult struct {
 func TestNodeHandler(t *testing.T) {
 	t.Cleanup(func() { testutils.GoleakVerifyNone(t) })
 
-	backend := NewPoolAllocator(hivetest.Logger(t), true, true)
+	backend := NewPoolAllocator(hivetest.Logger(t), true, true, nil)
 	err := backend.UpsertPool("default", []poolCIDRConfig{{cidr: netip.MustParsePrefix("10.0.0.0/8")}}, 24, nil, 0)
 	assert.NoError(t, err)
 
@@ -130,6 +130,7 @@ func TestNodeHandler(t *testing.T) {
 	nh := NewNodeHandler(
 		"test", hivetest.Logger(t), backend, nodeUpdater,
 		ipam.MultiPoolAccessor,
+		ipam.MultiPoolStatusAccessor,
 	)
 
 	// wait 1ms instead of default 1s base duration in unit tests
@@ -258,7 +259,7 @@ func TestNodeHandler(t *testing.T) {
 func TestOrphanCIDRsAfterRestart(t *testing.T) {
 	t.Cleanup(func() { testutils.GoleakVerifyNone(t) })
 
-	backend := NewPoolAllocator(hivetest.Logger(t), true, true)
+	backend := NewPoolAllocator(hivetest.Logger(t), true, true, nil)
 
 	onUpdateArgs := make(chan mockArgs)
 
@@ -279,6 +280,7 @@ func TestOrphanCIDRsAfterRestart(t *testing.T) {
 	nh := NewNodeHandler(
 		"test", hivetest.Logger(t), backend, nodeUpdater,
 		ipam.MultiPoolAccessor,
+		ipam.MultiPoolStatusAccessor,
 	)
 
 	// wait 1ms instead of default 1s base duration in unit tests
@@ -394,7 +396,7 @@ func TestOrphanCIDRsAfterRestart(t *testing.T) {
 func TestOrphanCIDRsReleased(t *testing.T) {
 	t.Cleanup(func() { testutils.GoleakVerifyNone(t) })
 
-	backend := NewPoolAllocator(hivetest.Logger(t), true, true)
+	backend := NewPoolAllocator(hivetest.Logger(t), true, true, nil)
 	err := backend.UpsertPool("test-pool",
 		[]poolCIDRConfig{
 			{cidr: netip.MustParsePrefix("10.0.0.0/28")},
@@ -417,6 +419,7 @@ func TestOrphanCIDRsReleased(t *testing.T) {
 	nh := NewNodeHandler(
 		"test", hivetest.Logger(t), backend, nodeUpdater,
 		ipam.MultiPoolAccessor,
+		ipam.MultiPoolStatusAccessor,
 	)
 
 	// wait 1ms instead of default 1s base duration in unit tests
@@ -520,7 +523,7 @@ func TestNodeHandlerRetries(t *testing.T) {
 	t.Cleanup(func() { testutils.GoleakVerifyNone(t) })
 
 	t.Run("get and update", func(t *testing.T) {
-		backend := NewPoolAllocator(hivetest.Logger(t), true, false)
+		backend := NewPoolAllocator(hivetest.Logger(t), true, false, nil)
 		assert.NoError(t, backend.UpsertPool("default", []poolCIDRConfig{{cidr: netip.MustParsePrefix("10.0.0.0/8")}}, 24, nil, 0))
 
 		node := &v2.CiliumNode{
@@ -541,7 +544,9 @@ func TestNodeHandlerRetries(t *testing.T) {
 			},
 			Status: v2.NodeStatus{
 				IPAM: ipamTypes.IPAMStatus{
-					OperatorStatus: ipamTypes.OperatorStatus{Error: "stale allocation error"},
+					OperatorStatus: ipamTypes.OperatorStatus{
+						Error: "stale allocation error",
+					},
 				},
 			},
 		}
@@ -581,6 +586,7 @@ func TestNodeHandlerRetries(t *testing.T) {
 		nh := NewNodeHandler(
 			"test", hivetest.Logger(t), backend, clientset.CiliumV2().CiliumNodes(),
 			ipam.MultiPoolAccessor,
+			ipam.MultiPoolStatusAccessor,
 		)
 		t.Cleanup(nh.Stop)
 		nh.controllerErrorRetryBaseDuration = time.Millisecond
@@ -603,7 +609,7 @@ func TestNodeHandlerRetries(t *testing.T) {
 	})
 
 	t.Run("updatestatus", func(t *testing.T) {
-		backend := NewPoolAllocator(hivetest.Logger(t), true, false)
+		backend := NewPoolAllocator(hivetest.Logger(t), true, false, nil)
 		assert.NoError(t, backend.UpsertPool("default", []poolCIDRConfig{{cidr: netip.MustParsePrefix("10.0.0.0/8")}}, 24, nil, 0))
 
 		node := &v2.CiliumNode{
@@ -630,7 +636,9 @@ func TestNodeHandlerRetries(t *testing.T) {
 			},
 			Status: v2.NodeStatus{
 				IPAM: ipamTypes.IPAMStatus{
-					OperatorStatus: ipamTypes.OperatorStatus{Error: "stale allocation error"},
+					OperatorStatus: ipamTypes.OperatorStatus{
+						Error: "stale allocation error",
+					},
 				},
 			},
 		}
@@ -659,6 +667,7 @@ func TestNodeHandlerRetries(t *testing.T) {
 		nh := NewNodeHandler(
 			"test", hivetest.Logger(t), backend, clientset.CiliumV2().CiliumNodes(),
 			ipam.MultiPoolAccessor,
+			ipam.MultiPoolStatusAccessor,
 		)
 		t.Cleanup(nh.Stop)
 		nh.controllerErrorRetryBaseDuration = time.Millisecond

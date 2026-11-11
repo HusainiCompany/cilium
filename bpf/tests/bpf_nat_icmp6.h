@@ -9,8 +9,6 @@
 
 #define ENABLE_IPV4			1
 #define ENABLE_IPV6			1
-#define ENABLE_NODEPORT			1
-#define ENABLE_MASQUERADE_IPV6		1
 
 #define NODE_ONE6 { .addr = v6_node_one_addr }
 #define EXT_IP6 { .addr = v6_ext_node_one_addr }
@@ -20,7 +18,6 @@
 
 #include <bpf/config/node.h>
 
-#define DEBUG
 
 #include <lib/dbg.h>
 #include <lib/eps.h>
@@ -28,8 +25,7 @@
 #include <lib/time.h>
 
 ASSIGN_CONFIG(union v6addr, nat_ipv6_masquerade, { .addr = v6_node_one_addr })
-
-ASSIGN_CONFIG(bool, enable_sctp, true)
+ASSIGN_CONFIG(bool, enable_masquerade_ipv6, true)
 
 #include "scapy.h"
 
@@ -383,4 +379,3 @@ int snat_v6_pmtu_sctp_check(const struct __ctx_buff *ctx)
 
 	return 0;
 }
-

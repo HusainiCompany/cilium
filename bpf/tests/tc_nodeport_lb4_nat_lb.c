@@ -6,8 +6,7 @@
 #include "pktgen.h"
 
 /* Enable code paths under test */
-#define ENABLE_IPV4
-#define ENABLE_NODEPORT
+#define ENABLE_IPV4 1
 
 #define CLIENT_IP		v4_ext_one
 #define CLIENT_PORT		__bpf_htons(111)
@@ -78,8 +77,21 @@ struct {
 #define fib_lookup mock_fib_lookup
 
 long mock_fib_lookup(__maybe_unused struct __ctx_buff * volatile ctx, struct bpf_fib_lookup *params,
-		     __maybe_unused int plen, __maybe_unused __u32 flags)
+		     int plen, __u32 flags)
 {
+	/* Consume plen and flags so that LLVM cannot dead-code-eliminate the
+	 * caller-side setup of R3/R4 at the fib_lookup() call site. The mock
+	 * itself does not care about these arguments, but if they are marked
+	 * __maybe_unused, the argument registers are left in an arbitrary
+	 * state at the pseudo call, and the verifier rejects the program
+	 * with "R4 is not a scalar" (btf_prepare_func_args) whenever
+	 * unrelated code changes shift register allocation.
+	 */
+	volatile int plen_sink = plen;
+	volatile __u32 flags_sink = flags;
+
+	(void)plen_sink;
+	(void)flags_sink;
 	__u32 key = 0;
 	struct mock_settings *settings = map_lookup_elem(&settings_map, &key);
 
@@ -151,9 +163,11 @@ mock_ctx_redirect(const struct __sk_buff *ctx __maybe_unused,
 #include "lib/ipcache.h"
 #include "lib/lb.h"
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
 ASSIGN_CONFIG(bool, enable_bpf_host_routing, true)
 ASSIGN_CONFIG(__u32, interface_ifindex, DEFAULT_IFACE)
 ASSIGN_CONFIG(union v4addr, ipv4_direct_routing, { .be32 = LB_IP })
+ASSIGN_CONFIG(bool, enable_nodeport, true)
 
 /* Set port ranges to have deterministic source port selection */
 #include "nodeport_defaults.h"

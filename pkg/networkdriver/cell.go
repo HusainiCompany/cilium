@@ -9,7 +9,6 @@ import (
 	"github.com/cilium/hive/cell"
 	"github.com/cilium/hive/job"
 	"github.com/cilium/statedb"
-	"github.com/spf13/pflag"
 	corev1 "k8s.io/api/core/v1"
 	resourceapi "k8s.io/api/resource/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -17,11 +16,16 @@ import (
 	kube_types "k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/workqueue"
 
+	"github.com/cilium/cilium/pkg/datapath/connector"
+	"github.com/cilium/cilium/pkg/datapath/xdp"
+	"github.com/cilium/cilium/pkg/ipam"
 	"github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2alpha1"
 	k8sClient "github.com/cilium/cilium/pkg/k8s/client"
 	"github.com/cilium/cilium/pkg/k8s/resource"
 	"github.com/cilium/cilium/pkg/k8s/synced"
 	"github.com/cilium/cilium/pkg/k8s/utils"
+	"github.com/cilium/cilium/pkg/networkdriver/config"
+	networkdriverIPAM "github.com/cilium/cilium/pkg/networkdriver/ipam"
 	"github.com/cilium/cilium/pkg/networkdriver/types"
 	"github.com/cilium/cilium/pkg/node"
 	nodetypes "github.com/cilium/cilium/pkg/node/types"
@@ -35,7 +39,7 @@ var Cell = cell.Module(
 	"network-driver",
 	"Cilium Network Driver",
 
-	cell.Config(defaultNetworkDriverConfig),
+	cell.Config(config.DefaultConfig),
 
 	cell.ProvidePrivate(
 		ciliumNetworkDriverConfigResource,
@@ -43,30 +47,19 @@ var Cell = cell.Module(
 		podResource,
 		newDeviceTable,
 		newAllocationTable,
+		newRXQueueFlowsTable,
 	),
-	cell.Invoke(registerNetworkDriver),
+	networkdriverIPAM.Cell,
+	cell.Invoke(
+		registerNetworkDriver,
+		registerRXQueueFlowReconciler,
+	),
 )
-
-type NetworkDriverConfig struct {
-	Enabled bool `mapstructure:"enable-network-driver"`
-}
-
-func (cfg NetworkDriverConfig) Flags(flags *pflag.FlagSet) {
-	flags.Bool(
-		"enable-network-driver",
-		cfg.Enabled,
-		"enable network driver to assign interfaces via Dynamic Resource Allocation",
-	)
-}
-
-var defaultNetworkDriverConfig = NetworkDriverConfig{
-	Enabled: false,
-}
 
 type networkDriverParams struct {
 	cell.In
 
-	CellCfg         NetworkDriverConfig
+	CellCfg         config.Config
 	Log             *slog.Logger
 	Lifecycle       cell.Lifecycle
 	ClientSet       k8sClient.Clientset
@@ -74,14 +67,25 @@ type networkDriverParams struct {
 	Configs         resource.Resource[*v2alpha1.CiliumNetworkDriverNodeConfig]
 	ResourceClaims  resource.Resource[*resourceapi.ResourceClaim]
 	Pods            resource.Resource[*corev1.Pod]
+	ConnectorConfig connector.Config
+	XDPConfig       xdp.Config
 	DaemonCfg       *option.DaemonConfig
 	DB              *statedb.DB
 	DeviceTable     statedb.RWTable[*DRADevice]
 	AllocationTable statedb.RWTable[*DRAAllocation]
 	LocalNodeStore  *node.LocalNodeStore
+	MultiPoolMgr    *ipam.MultiPoolManager
+
+	ConfigModifiers []claimConfigModifier `group:"claim-config-modifiers"`
 }
 
-func ciliumNetworkDriverConfigResource(cs k8sClient.Clientset, lc cell.Lifecycle, mp workqueue.MetricsProvider, cfg NetworkDriverConfig) resource.Resource[*v2alpha1.CiliumNetworkDriverNodeConfig] {
+type claimConfigModifierOut struct {
+	cell.Out
+
+	Modifier claimConfigModifier `group:"claim-config-modifiers"`
+}
+
+func ciliumNetworkDriverConfigResource(cs k8sClient.Clientset, lc cell.Lifecycle, mp workqueue.MetricsProvider, cfg config.Config) resource.Resource[*v2alpha1.CiliumNetworkDriverNodeConfig] {
 	if !cs.IsEnabled() || !cfg.Enabled {
 		return nil
 	}
@@ -144,6 +148,8 @@ func registerNetworkDriver(params networkDriverParams) *Driver {
 		jg:              params.JobGroup,
 		resourceClaims:  params.ResourceClaims,
 		pods:            params.Pods,
+		datapathMode:    params.ConnectorConfig.GetOperationalMode(),
+		xdpMode:         params.XDPConfig.AccelerationMode(),
 		kubeClient:      params.ClientSet,
 		deviceManagers:  make(map[types.DeviceManagerType]types.DeviceManager),
 		configCRD:       params.Configs,
@@ -152,6 +158,11 @@ func registerNetworkDriver(params networkDriverParams) *Driver {
 		deviceTable:     params.DeviceTable,
 		allocationTable: params.AllocationTable,
 		localNodeStore:  params.LocalNodeStore,
+		hostProcPath:    params.DaemonCfg.ProcFs,
+		multiPoolMgr:    params.MultiPoolMgr,
+		ipv4Enabled:     params.CellCfg.IPv4Enabled,
+		ipv6Enabled:     params.CellCfg.IPv6Enabled,
+		configModifiers: params.ConfigModifiers,
 	}
 
 	params.Lifecycle.Append(driver)

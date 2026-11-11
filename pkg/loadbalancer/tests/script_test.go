@@ -30,6 +30,7 @@ import (
 	"github.com/cilium/cilium/pkg/datapath/tables"
 	envoyCfg "github.com/cilium/cilium/pkg/envoy/config"
 	"github.com/cilium/cilium/pkg/hive"
+	iputil "github.com/cilium/cilium/pkg/ip"
 	k8sclient "github.com/cilium/cilium/pkg/k8s/client"
 	k8sClient "github.com/cilium/cilium/pkg/k8s/client/testutils"
 	k8sTables "github.com/cilium/cilium/pkg/k8s/tables"
@@ -289,6 +290,7 @@ func (tc testCommands) cmds() map[string]script.Cmd {
 		"test/update-backend-health":        tc.updateHealth(),
 		"test/bpfops-reset":                 tc.opsReset(),
 		"test/bpfops-summary":               tc.opsSummary(),
+		"test/bpfops-state-empty":           tc.opsStateEmpty(),
 		"test/set-node-labels":              tc.setNodeLabels(),
 		"test/set-node-ip":                  tc.setNodeIP(),
 		"test/set-is-service-healthchecked": tc.setIsServiceHealthChecked(),
@@ -353,6 +355,22 @@ func (tc testCommands) opsSummary() script.Cmd {
 		})
 }
 
+func (tc testCommands) opsStateEmpty() script.Cmd {
+	return script.Command(
+		script.CmdUsage{
+			Summary: "Fails if BPFOps state is not empty",
+		},
+		func(s *script.State, args ...string) (script.WaitFunc, error) {
+			return func(s *script.State) (stdout string, stderr string, err error) {
+				if !tc.ops.StateIsEmpty() {
+					stdout = tc.ops.StateSummary()
+					err = fmt.Errorf("state not empty")
+				}
+				return
+			}, nil
+		})
+}
+
 func (tc testCommands) setNodeLabels() script.Cmd {
 	return script.Command(
 		script.CmdUsage{Summary: "Set local node labels", Args: "key=value..."},
@@ -386,7 +404,7 @@ func (tc testCommands) setNodeIP() script.Cmd {
 			}
 			tc.lns.Update(func(n *node.LocalNode) {
 				n.IPAddresses = []nodeTypes.Address{
-					{Type: addressing.NodeExternalIP, IP: ip.AsSlice()},
+					{Type: addressing.NodeExternalIP, IP: iputil.AddrFrom(ip)},
 				}
 				s.Logf("NodeIP set to %s\n", ip)
 			})

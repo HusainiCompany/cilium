@@ -6,7 +6,6 @@ package mock
 import (
 	"context"
 	"fmt"
-	"net"
 	"net/netip"
 	"slices"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/aws/smithy-go"
 	"github.com/google/uuid"
 	"golang.org/x/time/rate"
+	"k8s.io/apimachinery/pkg/util/sets"
 
 	"github.com/cilium/cilium/pkg/api/helpers"
 	"github.com/cilium/cilium/pkg/aws/api"
@@ -354,6 +354,7 @@ func (e *API) CreateNetworkInterface(ctx context.Context, toAllocate int32, subn
 			panic("Unable to allocate IPv6 from allocator")
 		}
 		eni.IPv6Prefixes = append(eni.IPv6Prefixes, iputil.PrefixFrom(pfx))
+		eni.IPv6 = iputil.AddrFrom(eni.DeriveIPv6FromPrefixes())
 	}
 
 	subnet.AvailableAddresses -= numAddresses
@@ -563,14 +564,6 @@ func assignPrefixToENI(e *API, eni *types.ENI, prefixes int32) error {
 		}
 
 		eni.Prefixes = append(eni.Prefixes, iputil.PrefixFrom(pfx))
-		prefixIPs, err := iputil.PrefixToIps(pfx.String(), 0)
-		if err != nil {
-			return fmt.Errorf("unable to convert prefix %s to ips", pfx.String())
-		}
-		for _, ipStr := range prefixIPs {
-			a, _ := netip.ParseAddr(ipStr)
-			eni.Addresses = append(eni.Addresses, iputil.AddrFrom(a))
-		}
 	}
 	subnet.AvailableAddresses -= int(prefixes * option.ENIPDBlockSizeIPv4)
 	return nil
@@ -606,26 +599,15 @@ func (e *API) UnassignENIPrefixes(ctx context.Context, eniID string, prefixes []
 		return err
 	}
 
-	addresses := make([]string, 0)
-	// Convert prefixes to IP addresses and release prefix from pd allocator
+	releaseSet := make(sets.Set[netip.Prefix], len(prefixes))
+	// Validate prefixes and release them from the pd allocator
 	for _, prefix := range prefixes {
 		pfx, err := netip.ParsePrefix(prefix)
 		if err != nil {
 			return fmt.Errorf("Invalid CIDR block %s", prefix)
 		}
 		e.pdAllocator.Release(pfx)
-		ips, _ := iputil.PrefixToIps(prefix, 0)
-		addresses = append(addresses, ips...)
-	}
-
-	releaseMap := make(map[string]int)
-	for _, addr := range addresses {
-		// Validate given addresses
-		ipaddr := net.ParseIP(addr)
-		if ipaddr == nil {
-			return fmt.Errorf("Invalid IP address %s", addr)
-		}
-		releaseMap[addr] = 1
+		releaseSet.Insert(pfx)
 	}
 
 	for _, enis := range e.enis {
@@ -638,17 +620,13 @@ func (e *API) UnassignENIPrefixes(ctx context.Context, eniID string, prefixes []
 			return fmt.Errorf("subnet %s not found", eni.Subnet.ID)
 		}
 
-		var addressesAfterRelease []iputil.Addr
-
-		for _, address := range eni.Addresses {
-			_, ok := releaseMap[address.String()]
-			if !ok {
-				addressesAfterRelease = append(addressesAfterRelease, address)
-			} else {
-				subnet.AvailableAddresses++
+		eni.Prefixes = slices.DeleteFunc(eni.Prefixes, func(p iputil.Prefix) bool {
+			if releaseSet.Has(p.Prefix) {
+				subnet.AvailableAddresses += option.ENIPDBlockSizeIPv4
+				return true
 			}
-		}
-		eni.Addresses = addressesAfterRelease
+			return false
+		})
 		return nil
 	}
 	return fmt.Errorf("Unable to find ENI with ID %s", eniID)
@@ -672,6 +650,7 @@ func (e *API) AssignENIIPv6Prefix(ctx context.Context, eniID string) error {
 				return fmt.Errorf("unable to allocate IPv6 prefix: %w", err)
 			}
 			eni.IPv6Prefixes = append(eni.IPv6Prefixes, iputil.PrefixFrom(pfx))
+			eni.IPv6 = iputil.AddrFrom(eni.DeriveIPv6FromPrefixes())
 			return nil
 		}
 	}
@@ -713,7 +692,7 @@ func (e *API) GetInstance(ctx context.Context, vpcs ipamTypes.VirtualNetworkMap,
 	return &instance, nil
 }
 
-func (e *API) AssociateEIP(ctx context.Context, eniID string, eipTags ipamTypes.Tags) (string, error) {
+func (e *API) AssociateEIP(ctx context.Context, eniID string, eipTags ipamTypes.Tags) (netip.Addr, error) {
 	e.rateLimit()
 	e.delaySim.Delay(AssociateEIP)
 
@@ -721,22 +700,21 @@ func (e *API) AssociateEIP(ctx context.Context, eniID string, eipTags ipamTypes.
 	defer e.mutex.Unlock()
 
 	if err, ok := e.errors[AssociateEIP]; ok {
-		return "", err
+		return netip.Addr{}, err
 	}
 
-	ipAddr := "192.0.2.254"
+	addr := netip.MustParseAddr("192.0.2.254")
 
 	for _, enis := range e.enis {
 		for id, eni := range enis {
 			if eniID == id {
-				a, _ := netip.ParseAddr(ipAddr)
-				eni.PublicIP = iputil.AddrFrom(a)
-				return ipAddr, nil
+				eni.PublicIP = iputil.AddrFrom(addr)
+				return addr, nil
 			}
 		}
 	}
 
-	return "", fmt.Errorf("unable to find ENI %s", eniID)
+	return netip.Addr{}, fmt.Errorf("unable to find ENI %s", eniID)
 }
 
 func (e *API) GetInstances(ctx context.Context, vpcs ipamTypes.VirtualNetworkMap, subnets ipamTypes.SubnetMap) (*ipamTypes.InstanceMap, error) {

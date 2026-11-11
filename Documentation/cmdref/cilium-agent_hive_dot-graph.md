@@ -105,8 +105,11 @@ cilium-agent hive dot-graph [flags]
       --enable-l2-neigh-discovery                                 Enables L2 neighbor discovery, even when XDP acceleration is disabled
       --enable-l2-pod-announcements                               Enable announcing Pod IPs with Gratuitous ARP and NDP
       --enable-lb-ipam                                            Enable LB IPAM (default true)
+      --enable-local-redirect-policy                              Enable Local Redirect Policy
       --enable-monitor                                            Enable the monitor unix domain socket server (default true)
-      --enable-network-driver                                     enable network driver to assign interfaces via Dynamic Resource Allocation
+      --enable-network-driver                                     Enable the Cilium Network Driver to assign interfaces via Dynamic Resource Allocation
+      --enable-network-driver-ipv4                                Enable IPv4 address assignment for Cilium Network Driver resources (default true)
+      --enable-network-driver-ipv6                                Enable IPv6 address assignment for Cilium Network Driver resources
       --enable-no-service-endpoints-routable                      Enable routes when service has 0 endpoints (default true)
       --enable-node-ipam                                          Enable Node IPAM
       --enable-policy-secrets-sync                                Enables Envoy secret sync for Secrets used in CiliumNetworkPolicy and CiliumClusterwideNetworkPolicy
@@ -141,7 +144,7 @@ cilium-agent hive dot-graph [flags]
       --envoy-node-locality-enabled                               Enable Envoy node-locality support for zone-aware routing
       --envoy-policy-restore-timeout duration                     Maximum time to wait for endpoint policy restoration before starting serving resources to Envoy (default 3m0s)
       --envoy-secrets-namespace string                            EnvoySecretsNamespace is the namespace having secrets used by CEC
-      --envoy-xds-mode string                                     xDS server operating mode for Envoy proxy configuration. Valid values are "split" for the existing per-resource-type xDS, "delta-split" for incremental per-resource-type xDS, "ads" for Aggregated Discovery Service, or "strict-ads" for ADS with strict snapshot cache behavior and generated snapshot consistency checks (default "split")
+      --envoy-xds-mode string                                     xDS server operating mode for Envoy proxy configuration. Valid values are "split" for the existing per-resource-type xDS, "delta-split" for incremental per-resource-type xDS, "ads" for Aggregated Discovery Service, or "strict-ads" as a compatibility alias for "ads" (default "split")
       --force-device-detection                                    Forces the auto-detection of devices, even if specific devices are explicitly listed
       --gateway-api-secrets-namespace string                      GatewayAPISecretsNamespace is the namespace having tls secrets used by CEC, originating from Gateway API
       --gops-port uint16                                          Port for gops server to listen on (default 9890)

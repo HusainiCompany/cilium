@@ -15,6 +15,8 @@ DECLARE_CONFIG(bool, allow_icmp_frag_needed,
 DECLARE_CONFIG(bool, enable_icmp_rule, "Apply Network Policy for ICMP packets")
 DECLARE_CONFIG(bool, enable_policy_accounting,
 	       "Maintain packet and byte counters for every policy entry")
+DECLARE_CONFIG(bool, enable_policy_audit_mode,
+	       "Enable audit mode for policies")
 
 #ifndef EFFECTIVE_EP_ID
 #define EFFECTIVE_EP_ID 0
@@ -151,8 +153,8 @@ __policy_account(__u32 remote_id, __u8 egress, __u8 proto, __be16 dport, __u8 lp
 	value = map_lookup_elem(&cilium_policystats, &stats_key);
 
 	if (value) {
-		__sync_fetch_and_add(&value->packets, 1);
-		__sync_fetch_and_add(&value->bytes, bytes);
+		value->packets++;
+		value->bytes += bytes;
 	} else {
 		struct policy_stats_value newval = { 1, bytes };
 
@@ -393,12 +395,10 @@ policy_can_ingress(const struct __ctx_buff *ctx, __u32 src_id, __u32 dst_id,
 	cilium_dbg(ctx, DBG_POLICY_DENIED, src_id, dst_id);
 
 	*audited = 0;
-#ifdef POLICY_AUDIT_MODE
-	if (IS_ERR(ret)) {
+	if (CONFIG(enable_policy_audit_mode) && IS_ERR(ret)) {
 		ret = CTX_ACT_OK;
 		*audited = 1;
 	}
-#endif
 
 	return ret;
 }
@@ -427,12 +427,10 @@ static __always_inline int policy_can_ingress4(const struct __ctx_buff *ctx,
 				 match_type, audited, proxy_port, cookie);
 }
 
-#ifdef HAVE_ENCAP
 static __always_inline bool is_encap(__be16 dport, __u8 proto)
 {
 	return proto == IPPROTO_UDP && dport == bpf_htons(CONFIG(tunnel_port));
 }
-#endif
 
 static __always_inline int
 policy_can_egress(const struct __ctx_buff *ctx, __u32 src_id, __u32 dst_id,
@@ -441,10 +439,9 @@ policy_can_egress(const struct __ctx_buff *ctx, __u32 src_id, __u32 dst_id,
 {
 	int ret;
 
-#ifdef HAVE_ENCAP
-	if (src_id != HOST_ID && is_encap(dport, proto))
+	if (HAVE_ENCAP && src_id != HOST_ID && is_encap(dport, proto))
 		return DROP_ENCAP_PROHIBITED;
-#endif
+
 	ret = policy_can_access(ctx, src_id, dst_id, ethertype, dport,
 				proto, l4_off, CT_EGRESS, false, match_type,
 				proxy_port, cookie);
@@ -452,12 +449,10 @@ policy_can_egress(const struct __ctx_buff *ctx, __u32 src_id, __u32 dst_id,
 		return ret;
 	cilium_dbg(ctx, DBG_POLICY_DENIED, src_id, dst_id);
 	*audited = 0;
-#ifdef POLICY_AUDIT_MODE
-	if (IS_ERR(ret)) {
+	if (CONFIG(enable_policy_audit_mode) && IS_ERR(ret)) {
 		ret = CTX_ACT_OK;
 		*audited = 1;
 	}
-#endif
 	return ret;
 }
 

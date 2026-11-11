@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/utils/ptr"
+	gateway_inf_ext "sigs.k8s.io/gateway-api-inference-extension/api/v1"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	mcsapiv1beta1 "sigs.k8s.io/mcs-api/pkg/apis/v1beta1"
 )
@@ -369,6 +370,15 @@ func TestGetConcreteObject(t *testing.T) {
 			},
 			want: &mcsapiv1beta1.ServiceImport{},
 		},
+		{
+			name: "InferencePool",
+			gvk: schema.GroupVersionKind{
+				Group:   gateway_inf_ext.GroupVersion.Group,
+				Version: gateway_inf_ext.GroupVersion.Version,
+				Kind:    InferencePoolKind,
+			},
+			want: &gateway_inf_ext.InferencePool{},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -485,6 +495,15 @@ func TestGetConcreteListObject(t *testing.T) {
 			},
 			want: &mcsapiv1beta1.ServiceImportList{},
 		},
+		{
+			name: "InferencePoolList",
+			gvk: schema.GroupVersionKind{
+				Group:   gateway_inf_ext.GroupVersion.Group,
+				Version: gateway_inf_ext.GroupVersion.Version,
+				Kind:    InferencePoolKind,
+			},
+			want: &gateway_inf_ext.InferencePoolList{},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -492,6 +511,92 @@ func TestGetConcreteListObject(t *testing.T) {
 			if reflect.TypeOf(got) != reflect.TypeOf(tt.want) {
 				t.Errorf("got a %T, expected a %T", got, tt.want)
 			}
+		})
+	}
+}
+
+func TestFrontendTLSValidationForPort(t *testing.T) {
+	defaultValidation := &gatewayv1.FrontendTLSValidation{
+		CACertificateRefs: []gatewayv1.ObjectReference{{
+			Group: "",
+			Kind:  "ConfigMap",
+			Name:  "default-ca",
+		}},
+	}
+	perPortValidation := &gatewayv1.FrontendTLSValidation{
+		CACertificateRefs: []gatewayv1.ObjectReference{{
+			Group: "",
+			Kind:  "ConfigMap",
+			Name:  "per-port-ca",
+		}},
+	}
+
+	tests := []struct {
+		name       string
+		defaultSet bool
+		perPortSet bool
+		port       gatewayv1.PortNumber
+		want       *gatewayv1.FrontendTLSValidation
+	}{
+		{
+			name:       "no default or per-port validation",
+			defaultSet: false,
+			perPortSet: false,
+			port:       443,
+			want:       nil,
+		},
+		{
+			name:       "per-port validation",
+			defaultSet: false,
+			perPortSet: true,
+			port:       443,
+			want:       perPortValidation,
+		},
+		{
+			name:       "default validation",
+			defaultSet: true,
+			perPortSet: false,
+			port:       443,
+			want:       defaultValidation,
+		},
+		{
+			name:       "per-port validation overrides default",
+			defaultSet: true,
+			perPortSet: true,
+			port:       443,
+			want:       perPortValidation,
+		},
+		{
+			name:       "default validation for unmatched port",
+			defaultSet: true,
+			perPortSet: true,
+			port:       8443,
+			want:       defaultValidation,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			frontend := &gatewayv1.FrontendTLSConfig{
+				Default: gatewayv1.TLSConfig{},
+			}
+			if tt.defaultSet {
+				frontend.Default.Validation = defaultValidation
+			}
+			if tt.perPortSet {
+				frontend.PerPort = []gatewayv1.TLSPortConfig{{
+					Port: 443,
+					TLS:  gatewayv1.TLSConfig{Validation: perPortValidation},
+				}}
+			}
+
+			gw := &gatewayv1.Gateway{
+				Spec: gatewayv1.GatewaySpec{
+					TLS: &gatewayv1.GatewayTLSConfig{Frontend: frontend},
+				},
+			}
+
+			require.Equal(t, tt.want, FrontendTLSValidationForPort(gw, tt.port))
 		})
 	}
 }

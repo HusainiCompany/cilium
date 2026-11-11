@@ -26,6 +26,7 @@ import (
 	"github.com/cilium/cilium/pkg/fqdn/restore"
 	identityPkg "github.com/cilium/cilium/pkg/identity"
 	"github.com/cilium/cilium/pkg/ipcache"
+	k8sUtils "github.com/cilium/cilium/pkg/k8s/utils"
 	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	monitorAPI "github.com/cilium/cilium/pkg/monitor/api"
@@ -85,13 +86,13 @@ func (e *Endpoint) GetIngressNamedPort(name string, proto u8proto.U8proto) uint1
 // destination port numbers, if any. For port ranges the proxy is identified by
 // the first port in the range, as overlapping proxy port ranges are not
 // supported. Must be called with e.mutex held.
-func (e *Endpoint) proxyIDs(selectorPolicy policy.SelectorPolicy, l4 *policy.L4Filter, listener string, scSnapshot policy.SelectorSnapshot) iter.Seq2[string, uint16] {
+func (e *Endpoint) proxyIDs(selectorPolicy policy.SelectorPolicy, l4 *policy.L4Filter, parser policy.L7ParserType, listener string, scSnapshot policy.SelectorSnapshot) iter.Seq2[string, uint16] {
 	port := l4.Port
 
 	if port == 0 {
 		if l4.PortName == "" {
 			return func(yield func(string, uint16) bool) {
-				yield(policy.ProxyID(e.ID, l4.Ingress, string(l4.Protocol), port, listener), port)
+				yield(policy.ProxyID(e.ID, l4.Ingress, string(l4.Protocol), port, parser, listener), port)
 			}
 		}
 		if l4.Ingress {
@@ -103,7 +104,7 @@ func (e *Endpoint) proxyIDs(selectorPolicy policy.SelectorPolicy, l4 *policy.L4F
 			// Egress named port with different ports for different identities.
 			return func(yield func(string, uint16) bool) {
 				for _, port := range selectorPolicy.GetEgressNamedPorts(l4.PortName, l4.U8Proto, l4.Identities(scSnapshot)) {
-					if !yield(policy.ProxyID(e.ID, false, string(l4.Protocol), port, listener), port) {
+					if !yield(policy.ProxyID(e.ID, false, string(l4.Protocol), port, parser, listener), port) {
 						return
 					}
 				}
@@ -112,7 +113,7 @@ func (e *Endpoint) proxyIDs(selectorPolicy policy.SelectorPolicy, l4 *policy.L4F
 	}
 
 	return func(yield func(string, uint16) bool) {
-		yield(policy.ProxyID(e.ID, l4.Ingress, string(l4.Protocol), port, listener), port)
+		yield(policy.ProxyID(e.ID, l4.Ingress, string(l4.Protocol), port, parser, listener), port)
 	}
 }
 
@@ -704,16 +705,7 @@ func (e *Endpoint) updateRegenerationStatistics(ctx *regenerationContext, err er
 			logfields.Reason, ctx.Reason,
 		}
 		for field, stat := range stats.GetMap() {
-			logAttrs = append(
-				logAttrs,
-				field, stat.Total(),
-			)
-		}
-		for field, stat := range stats.datapathRealization.GetMap() {
-			logAttrs = append(
-				logAttrs,
-				field, stat.Total(),
-			)
+			logAttrs = append(logAttrs, field, stat.Total())
 		}
 	}
 
@@ -863,7 +855,15 @@ func (e *Endpoint) UpdatePolicy(idsToRegen *set.Set[identityPkg.NumericIdentity]
 			// Unaffected identities are not normally recomputed at toRev. Schedule
 			// this one before making the upcoming regeneration wait for it.
 			if toRev > e.skippedPolicyRevision {
-				if _, err := e.policyFetcher.RecomputeIdentityPolicy(e.SecurityIdentity, toRev); err != nil {
+				if _, err := e.policyFetcher.RecomputeIdentityPolicy(e.SecurityIdentity, toRev); errors.Is(err, compute.ErrIdentityNotRegistered) {
+					e.getLogger().Debug(
+						"Skipping policy recompute for unregistered identity",
+						logfields.Identity, e.SecurityIdentity.ID,
+						logfields.PolicyRevision, toRev,
+					)
+					unlock()
+					return
+				} else if err != nil {
 					e.getLogger().Warn(
 						"Failed to recompute policy for initializing endpoint",
 						logfields.Error, err,
@@ -1246,8 +1246,14 @@ func (e *Endpoint) runIPIdentitySync(endpointIP netip.Addr) {
 				k8sPodUID := e.GetK8sPodUID()
 
 				k8sServiceAccount := ""
+				k8sWorkloadName := ""
+				k8sWorkloadKind := ""
 				if pod := e.GetPod(); pod != nil {
 					k8sServiceAccount = pod.Spec.ServiceAccountName
+					if workloadMeta, workloadTypeMeta, ok := k8sUtils.GetWorkloadMetaFromPod(pod); ok {
+						k8sWorkloadName = workloadMeta.Name
+						k8sWorkloadKind = workloadTypeMeta.Kind
+					}
 				}
 
 				// Release lock as we do not want to have long-lasting key-value
@@ -1263,6 +1269,8 @@ func (e *Endpoint) runIPIdentitySync(endpointIP netip.Addr) {
 					K8sNamespace:      k8sNamespace,
 					K8sPodName:        k8sPodName,
 					K8sPodUID:         k8sPodUID,
+					K8sWorkloadName:   k8sWorkloadName,
+					K8sWorkloadKind:   k8sWorkloadKind,
 					K8sServiceAccount: k8sServiceAccount,
 					NPM:               e.GetK8sPorts(),
 				}

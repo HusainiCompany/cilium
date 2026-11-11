@@ -23,6 +23,7 @@
 #include "lib/sock.h"
 #include "lib/trace_sock.h"
 #include "lib/health_check.h"
+#include "lib/socket_lb.h"
 
 #define SYS_REJECT	0
 #define SYS_PROCEED	1
@@ -30,13 +31,13 @@
 DECLARE_CONFIG(bool, disable_external_ip_mitigation,
 	       "Disable externalIP mitigation (CVE-2020-8554)")
 
-static __always_inline __maybe_unused bool is_v4_loopback(__be32 daddr)
+static __always_inline bool is_v4_loopback(__be32 daddr)
 {
 	/* Check for 127.0.0.0/8 range, RFC3330. */
 	return (daddr & bpf_htonl(0xff000000)) == bpf_htonl(0x7f000000);
 }
 
-static __always_inline __maybe_unused bool is_v6_loopback(const union v6addr *daddr)
+static __always_inline bool is_v6_loopback(const union v6addr *daddr)
 {
 	/* Check for ::1/128, RFC4291. */
 	union v6addr loopback = { .addr[15] = 1, };
@@ -48,7 +49,7 @@ static __always_inline __maybe_unused bool is_v6_loopback(const union v6addr *da
 #define ctx_protocol(__ctx) ((__u8)(volatile __u32)(__ctx)->protocol)
 
 /* Hack due to missing narrow ctx access. */
-static __always_inline __maybe_unused __be16
+static __always_inline __be16
 ctx_dst_port(const struct bpf_sock_addr *ctx)
 {
 	volatile __u32 dport = ctx->user_port;
@@ -64,13 +65,13 @@ ctx_src_port(const struct bpf_sock *ctx)
 	return (__be16)bpf_htons(sport);
 }
 
-static __always_inline __maybe_unused
+static __always_inline
 void ctx_set_port(struct bpf_sock_addr *ctx, __be16 dport)
 {
 	ctx->user_port = (__u32)dport;
 }
 
-static __always_inline __maybe_unused bool task_in_extended_hostns(void)
+static __always_inline bool task_in_extended_hostns(void)
 {
 	__u32 classid = CONFIG(mke_host);
 
@@ -80,8 +81,8 @@ static __always_inline __maybe_unused bool task_in_extended_hostns(void)
 	return get_cgroup_classid() == classid;
 }
 
-static __always_inline __maybe_unused bool
-ctx_in_hostns(void *ctx __maybe_unused, __net_cookie *cookie)
+static __always_inline bool
+ctx_in_hostns(void *ctx, __net_cookie *cookie)
 {
 	__net_cookie own_cookie = get_netns_cookie(ctx);
 	__net_cookie host_cookie = CONFIG(host_netns_cookie);
@@ -96,8 +97,8 @@ ctx_in_hostns(void *ctx __maybe_unused, __net_cookie *cookie)
 	       task_in_extended_hostns();
 }
 
-static __always_inline __maybe_unused
-bool sock_is_health_check(struct bpf_sock_addr *ctx __maybe_unused)
+static __always_inline
+bool sock_is_health_check(struct bpf_sock_addr *ctx)
 {
 	if (!CONFIG(enable_health_check))
 		return false;
@@ -110,8 +111,8 @@ bool sock_is_health_check(struct bpf_sock_addr *ctx __maybe_unused)
 	return false;
 }
 
-static __always_inline __maybe_unused
-void sock_reset_health_check_marker(struct bpf_sock_addr *ctx __maybe_unused)
+static __always_inline
+void sock_reset_health_check_marker(struct bpf_sock_addr *ctx)
 {
 	if (!CONFIG(enable_health_check))
 		return;
@@ -127,14 +128,14 @@ void sock_reset_health_check_marker(struct bpf_sock_addr *ctx __maybe_unused)
 	set_socket_opt(ctx, SOL_SOCKET, SO_MARK, &val, sizeof(val));
 }
 
-static __always_inline __maybe_unused
+static __always_inline
 __u64 sock_select_slot(struct bpf_sock_addr *ctx)
 {
 	return ctx_protocol(ctx) == IPPROTO_TCP ?
 	       get_prandom_u32() : sock_local_cookie(ctx);
 }
 
-static __always_inline __maybe_unused
+static __always_inline
 bool sock_proto_enabled(__u8 proto)
 {
 	switch (proto) {
@@ -147,8 +148,6 @@ bool sock_proto_enabled(__u8 proto)
 		return false;
 	}
 }
-
-#ifdef ENABLE_IPV4
 
 static __always_inline int sock4_update_revnat(struct bpf_sock_addr *ctx,
 					       const struct lb4_backend *backend,
@@ -217,7 +216,6 @@ sock4_skip_xlate(const struct lb4_service *svc, __be32 address)
 	return false;
 }
 
-#ifdef ENABLE_NODEPORT
 static __always_inline const struct lb4_service *
 sock4_wildcard_lookup(struct lb4_key *key)
 {
@@ -245,13 +243,13 @@ wildcard_lookup:
 	key->address = 0;
 	return lb4_lookup_service(key, true);
 }
-#endif /* ENABLE_NODEPORT */
 
 static __always_inline const struct lb4_service *
-sock4_wildcard_lookup_full(struct lb4_key *key __maybe_unused,
-			   const bool in_hostns __maybe_unused)
+sock4_wildcard_lookup_full(struct lb4_key *key, const bool in_hostns)
 {
-#ifdef ENABLE_NODEPORT
+	if (!NODEPORT_ENABLED)
+		return NULL;
+
 	bool loopback = is_v4_loopback(key->address);
 	const struct remote_endpoint_info *info;
 	const struct lb4_service *svc;
@@ -298,9 +296,6 @@ lookup:
 	 */
 	return (lb4_svc_is_hostport(svc) &&
 		(!lb4_svc_is_loopback(svc) || loopback)) ? svc : NULL;
-#endif /* ENABLE_NODEPORT */
-
-	return NULL;
 }
 
 static __always_inline int __sock4_xlate_fwd(struct bpf_sock_addr *ctx,
@@ -323,11 +318,9 @@ static __always_inline int __sock4_xlate_fwd(struct bpf_sock_addr *ctx,
 	const struct lb4_service *backend_slot;
 	bool backend_from_affinity = false;
 	__u32 backend_id = 0;
-#ifdef ENABLE_L7_LB
 	struct lb4_backend l7backend;
-#endif
 
-	if (is_defined(ENABLE_SOCKET_LB_HOST_ONLY) && !in_hostns)
+	if (CONFIG(socket_lb).hostns_only && !in_hostns)
 		return -ENXIO;
 
 	if (!udp_only && !sock_proto_enabled(protocol))
@@ -376,13 +369,12 @@ static __always_inline int __sock4_xlate_fwd(struct bpf_sock_addr *ctx,
 					      dst_ip, dst_port))
 		return -ENXIO;
 
-#ifdef ENABLE_L7_LB
 	/* Do not perform service translation at socker layer for
 	 * services with L7 load balancing as we need to postpone
 	 * policy enforcement to take place after l7 load balancer and
 	 * we can't currently do that from the socket layer.
 	 */
-	if (lb4_svc_is_l7_loadbalancer(svc)) {
+	if (CONFIG(enable_l7_lb) && lb4_svc_is_l7_loadbalancer(svc)) {
 		/* TC level eBPF datapath does not handle node local traffic,
 		 * but we need to redirect for L7 LB also in that case.
 		 */
@@ -403,7 +395,6 @@ static __always_inline int __sock4_xlate_fwd(struct bpf_sock_addr *ctx,
 		/* Let the TC level eBPF datapath redirect to L7 LB. */
 		return 0;
 	}
-#endif /* ENABLE_L7_LB */
 
 	if (lb4_svc_is_affinity(svc)) {
 		/* Note, for newly created affinity entries there is a
@@ -456,9 +447,7 @@ static __always_inline int __sock4_xlate_fwd(struct bpf_sock_addr *ctx,
 	send_trace_sock_notify4(ctx_full, XLATE_POST_DIRECTION_FWD, backend->address,
 				bpf_ntohs(backend->port), is_connect);
 
-#ifdef ENABLE_L7_LB
 out:
-#endif
 	if (sock4_update_revnat(ctx_full, backend, dst_ip, dst_port,
 				svc->rev_nat_index) < 0) {
 		update_metrics(0, METRIC_EGRESS, REASON_LB_REVNAT_UPDATE);
@@ -476,6 +465,9 @@ int cil_sock4_connect(struct bpf_sock_addr *ctx)
 {
 	int err;
 
+	if (!is_defined(ENABLE_IPV4))
+		return SYS_PROCEED;
+
 	if (sock_is_health_check(ctx)) {
 		sock_reset_health_check_marker(ctx);
 		return SYS_PROCEED;
@@ -490,7 +482,6 @@ int cil_sock4_connect(struct bpf_sock_addr *ctx)
 	return SYS_PROCEED;
 }
 
-#ifdef ENABLE_NODEPORT
 static __always_inline int __sock4_post_bind(struct bpf_sock *ctx,
 					     struct bpf_sock *ctx_full)
 {
@@ -537,6 +528,9 @@ int cil_sock4_post_bind(struct bpf_sock *ctx)
 {
 	int err;
 
+	if (!is_defined(ENABLE_IPV4))
+		return SYS_PROCEED;
+
 	err = __sock4_post_bind(ctx, ctx);
 	if (err < 0) {
 		try_set_retval(err);
@@ -545,7 +539,6 @@ int cil_sock4_post_bind(struct bpf_sock *ctx)
 
 	return SYS_PROCEED;
 }
-#endif /* ENABLE_NODEPORT */
 
 static __always_inline void sock4_auto_bind(struct bpf_sock_addr *ctx)
 {
@@ -580,6 +573,8 @@ int cil_sock4_pre_bind(struct bpf_sock_addr *ctx)
 {
 	int ret = SYS_PROCEED;
 
+	if (!is_defined(ENABLE_IPV4))
+		return ret;
 	if (!sock_proto_enabled(ctx_protocol(ctx)) ||
 	    !ctx_in_hostns(ctx, NULL))
 		return ret;
@@ -642,6 +637,9 @@ int cil_sock4_sendmsg(struct bpf_sock_addr *ctx)
 {
 	int err;
 
+	if (!is_defined(ENABLE_IPV4))
+		return SYS_PROCEED;
+
 	err = __sock4_xlate_fwd(ctx, ctx, true, false);
 	if (err == -EHOSTUNREACH || err == -ENOMEM) {
 		try_set_retval(err);
@@ -654,22 +652,23 @@ int cil_sock4_sendmsg(struct bpf_sock_addr *ctx)
 __section("cgroup/recvmsg4")
 int cil_sock4_recvmsg(struct bpf_sock_addr *ctx)
 {
+	if (!is_defined(ENABLE_IPV4))
+		return SYS_PROCEED;
+
 	__sock4_xlate_rev(ctx, ctx);
 	return SYS_PROCEED;
 }
 
-#ifdef ENABLE_SOCKET_LB_PEER
 __section("cgroup/getpeername4")
 int cil_sock4_getpeername(struct bpf_sock_addr *ctx)
 {
+	if (!is_defined(ENABLE_IPV4))
+		return SYS_PROCEED;
+
 	__sock4_xlate_rev(ctx, ctx);
 	return SYS_PROCEED;
 }
-#endif /* ENABLE_SOCKET_LB_PEER */
 
-#endif /* ENABLE_IPV4 */
-
-#if defined(ENABLE_IPV6) || defined(ENABLE_IPV4)
 #ifdef ENABLE_IPV6
 
 static __always_inline int sock6_update_revnat(struct bpf_sock_addr *ctx,
@@ -745,7 +744,6 @@ static __always_inline void ctx_get_v6_address(const struct bpf_sock_addr *ctx,
 	barrier();
 }
 
-#ifdef ENABLE_NODEPORT
 static __always_inline void ctx_get_v6_src_address(const struct bpf_sock *ctx,
 						   union v6addr *addr)
 {
@@ -758,7 +756,6 @@ static __always_inline void ctx_get_v6_src_address(const struct bpf_sock *ctx,
 	addr->p4 = ctx->src_ip6[3];
 	barrier();
 }
-#endif /* ENABLE_NODEPORT */
 
 static __always_inline void ctx_set_v6_address(struct bpf_sock_addr *ctx,
 					       const union v6addr *addr)
@@ -790,8 +787,7 @@ sock6_skip_xlate(const struct lb6_service *svc, const union v6addr *address)
 	return false;
 }
 
-#ifdef ENABLE_NODEPORT
-static __always_inline __maybe_unused const struct lb6_service *
+static __always_inline const struct lb6_service *
 sock6_wildcard_lookup(struct lb6_key *key)
 {
 	const struct remote_endpoint_info *info;
@@ -818,13 +814,13 @@ wildcard_lookup:
 	memset(&key->address, 0, sizeof(key->address));
 	return lb6_lookup_service(key, true);
 }
-#endif /* ENABLE_NODEPORT */
 
 static __always_inline __maybe_unused const struct lb6_service *
-sock6_wildcard_lookup_full(struct lb6_key *key __maybe_unused,
-			   const bool in_hostns __maybe_unused)
+sock6_wildcard_lookup_full(struct lb6_key *key, const bool in_hostns)
 {
-#ifdef ENABLE_NODEPORT
+	if (!NODEPORT_ENABLED)
+		return NULL;
+
 	bool loopback = is_v6_loopback(&key->address);
 	const struct remote_endpoint_info *info;
 	const struct lb6_service *svc;
@@ -865,19 +861,19 @@ lookup:
 
 	return (lb6_svc_is_hostport(svc) &&
 		(!lb6_svc_is_loopback(svc) || loopback)) ? svc : NULL;
-#endif /* ENABLE_NODEPORT */
-	return NULL;
 }
 
 static __always_inline
-int sock6_xlate_v4_in_v6(struct bpf_sock_addr *ctx __maybe_unused,
-			 const bool udp_only __maybe_unused,
-			 const bool is_connect __maybe_unused)
+int sock6_xlate_v4_in_v6(struct bpf_sock_addr *ctx,
+			 const bool udp_only,
+			 const bool is_connect)
 {
-#ifdef ENABLE_IPV4
 	struct bpf_sock_addr fake_ctx;
 	union v6addr addr6;
 	int ret;
+
+	if (!is_defined(ENABLE_IPV4))
+		return -ENXIO;
 
 	ctx_get_v6_address(ctx, &addr6);
 	if (!is_v4_in_v6(&addr6))
@@ -897,17 +893,16 @@ int sock6_xlate_v4_in_v6(struct bpf_sock_addr *ctx __maybe_unused,
 	ctx_set_port(ctx, (__u16)fake_ctx.user_port);
 
 	return 0;
-#endif /* ENABLE_IPV4 */
-	return -ENXIO;
 }
 
-#ifdef ENABLE_NODEPORT
 static __always_inline int
-sock6_post_bind_v4_in_v6(struct bpf_sock *ctx __maybe_unused)
+sock6_post_bind_v4_in_v6(struct bpf_sock *ctx)
 {
-#ifdef ENABLE_IPV4
 	struct bpf_sock fake_ctx;
 	union v6addr addr6;
+
+	if (!is_defined(ENABLE_IPV4))
+		return 0;
 
 	ctx_get_v6_src_address(ctx, &addr6);
 	if (!is_v4_in_v6(&addr6))
@@ -919,8 +914,6 @@ sock6_post_bind_v4_in_v6(struct bpf_sock *ctx __maybe_unused)
 	fake_ctx.src_port = ctx->src_port;
 
 	return __sock4_post_bind(&fake_ctx, ctx);
-#endif /* ENABLE_IPV4 */
-	return 0;
 }
 
 static __always_inline int __sock6_post_bind(struct bpf_sock *ctx)
@@ -968,15 +961,16 @@ int cil_sock6_post_bind(struct bpf_sock *ctx)
 
 	return SYS_PROCEED;
 }
-#endif /* ENABLE_NODEPORT */
 
 static __always_inline int
-sock6_pre_bind_v4_in_v6(struct bpf_sock_addr *ctx __maybe_unused)
+sock6_pre_bind_v4_in_v6(struct bpf_sock_addr *ctx)
 {
-#ifdef ENABLE_IPV4
 	struct bpf_sock_addr fake_ctx;
 	union v6addr addr6;
 	int ret;
+
+	if (!is_defined(ENABLE_IPV4))
+		return 0;
 
 	ctx_get_v6_address(ctx, &addr6);
 
@@ -992,7 +986,6 @@ sock6_pre_bind_v4_in_v6(struct bpf_sock_addr *ctx __maybe_unused)
 	build_v4_in_v6(&addr6, fake_ctx.user_ip4);
 	ctx_set_v6_address(ctx, &addr6);
 	ctx_set_port(ctx, (__u16)fake_ctx.user_port);
-#endif /* ENABLE_IPV4 */
 	return 0;
 }
 
@@ -1064,11 +1057,9 @@ static __always_inline int __sock6_xlate_fwd(struct bpf_sock_addr *ctx,
 	const struct lb6_service *backend_slot;
 	bool backend_from_affinity = false;
 	__u32 backend_id = 0;
-#ifdef ENABLE_L7_LB
 	struct lb6_backend l7backend;
-#endif
 
-	if (is_defined(ENABLE_SOCKET_LB_HOST_ONLY) && !in_hostns)
+	if (CONFIG(socket_lb).hostns_only && !in_hostns)
 		return -ENXIO;
 
 	if (!udp_only && !sock_proto_enabled(protocol))
@@ -1105,9 +1096,8 @@ static __always_inline int __sock6_xlate_fwd(struct bpf_sock_addr *ctx,
 					      dst_ip, dst_port))
 		return -ENXIO;
 
-#ifdef ENABLE_L7_LB
 	/* See __sock4_xlate_fwd for commentary. */
-	if (lb6_svc_is_l7_loadbalancer(svc)) {
+	if (CONFIG(enable_l7_lb) && lb6_svc_is_l7_loadbalancer(svc)) {
 		if (in_hostns) {
 			union v6addr loopback = { .addr[15] = 1, };
 
@@ -1120,7 +1110,6 @@ static __always_inline int __sock6_xlate_fwd(struct bpf_sock_addr *ctx,
 		}
 		return 0;
 	}
-#endif /* ENABLE_L7_LB */
 
 	if (lb6_svc_is_affinity(svc)) {
 		backend_id = lb6_affinity_backend_id_by_netns(svc, &id);
@@ -1160,9 +1149,7 @@ static __always_inline int __sock6_xlate_fwd(struct bpf_sock_addr *ctx,
 	send_trace_sock_notify6(ctx, XLATE_POST_DIRECTION_FWD, &backend->address,
 				bpf_ntohs(backend->port), is_connect);
 
-#ifdef ENABLE_L7_LB
 out:
-#endif
 	if (sock6_update_revnat(ctx, backend, &dst_ip, dst_port,
 				svc->rev_nat_index) < 0) {
 		update_metrics(0, METRIC_EGRESS, REASON_LB_REVNAT_UPDATE);
@@ -1198,12 +1185,14 @@ int cil_sock6_connect(struct bpf_sock_addr *ctx)
 }
 
 static __always_inline int
-sock6_xlate_rev_v4_in_v6(struct bpf_sock_addr *ctx __maybe_unused)
+sock6_xlate_rev_v4_in_v6(struct bpf_sock_addr *ctx)
 {
-#ifdef ENABLE_IPV4
 	struct bpf_sock_addr fake_ctx;
 	union v6addr addr6;
 	int ret;
+
+	if (!is_defined(ENABLE_IPV4))
+		return -ENXIO;
 
 	ctx_get_v6_address(ctx, &addr6);
 	if (!is_v4_in_v6(&addr6))
@@ -1223,8 +1212,6 @@ sock6_xlate_rev_v4_in_v6(struct bpf_sock_addr *ctx __maybe_unused)
 	ctx_set_port(ctx, (__u16)fake_ctx.user_port);
 
 	return 0;
-#endif /* ENABLE_IPV4 */
-	return -ENXIO;
 }
 
 static __always_inline int __sock6_xlate_rev(struct bpf_sock_addr *ctx)
@@ -1295,32 +1282,27 @@ int cil_sock6_recvmsg(struct bpf_sock_addr *ctx)
 	return SYS_PROCEED;
 }
 
-#ifdef ENABLE_SOCKET_LB_PEER
 __section("cgroup/getpeername6")
 int cil_sock6_getpeername(struct bpf_sock_addr *ctx)
 {
 	__sock6_xlate_rev(ctx);
 	return SYS_PROCEED;
 }
-#endif /* ENABLE_SOCKET_LB_PEER */
 
 __section("cgroup/sock_release")
-int cil_sock_release(struct bpf_sock *ctx __maybe_unused)
+int cil_sock_release(struct bpf_sock *ctx)
 {
-#ifdef ENABLE_IPV4
-	if (ctx->family == AF_INET) {
+	if (is_defined(ENABLE_IPV4) && ctx->family == AF_INET) {
 		if (!sock4_delete_revnat(ctx, ctx))
 			update_metrics(0, METRIC_EGRESS,
 				       REASON_LB_REVNAT_DELETE);
 	}
-#endif /* ENABLE_IPV4 */
 #ifdef ENABLE_IPV6
 	if (ctx->family == AF_INET6) {
-# ifdef ENABLE_IPV4
 		union v6addr addr6;
 
 		ctx_get_v6_dst_address(ctx, &addr6);
-		if (is_v4_in_v6(&addr6)) {
+		if (is_defined(ENABLE_IPV4) && is_v4_in_v6(&addr6)) {
 			struct bpf_sock fake_ctx;
 
 			memset(&fake_ctx, 0, sizeof(fake_ctx));
@@ -1330,9 +1312,7 @@ int cil_sock_release(struct bpf_sock *ctx __maybe_unused)
 			if (!sock4_delete_revnat(&fake_ctx, ctx))
 				update_metrics(0, METRIC_EGRESS,
 					       REASON_LB_REVNAT_DELETE);
-		} else
-# endif /* ENABLE_IPV4 */
-		{
+		} else {
 			if (!sock6_delete_revnat(ctx))
 				update_metrics(0, METRIC_EGRESS,
 					       REASON_LB_REVNAT_DELETE);
@@ -1341,6 +1321,5 @@ int cil_sock_release(struct bpf_sock *ctx __maybe_unused)
 #endif /* ENABLE_IPV6 */
 	return SYS_PROCEED;
 }
-#endif /* ENABLE_IPV6 || ENABLE_IPV4 */
 
 BPF_LICENSE("Dual BSD/GPL");

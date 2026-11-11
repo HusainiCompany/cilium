@@ -62,7 +62,7 @@ jobs:
   echo-inputs:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     name: Echo Workflow Dispatch Inputs
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Echo Workflow Dispatch Inputs
         run: |
@@ -70,7 +70,7 @@ jobs:
 
   commit-status-start:
     name: Commit Status Start
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Set initial commit status
         uses: cilium/actions/set-commit-status@687b48a0547e534dd7270d5069a5ab7967c0e907 # main
@@ -79,20 +79,18 @@ jobs:
 
   prepare-extra-args:
     name: Prepare extra-args
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       extra-args: ${{ steps.merge.outputs.extra-args }}
     steps:
       - name: Merge extra-args with "detect-race"
         id: merge
+        env:
+          EXTRA_ARGS: ${{ inputs.extra-args }}
         run: |
-          ARGS='${{ inputs.extra-args }}'
-          # Empty on schedule events, where jq would emit nothing and thus
-          # silently drop "detect-race".
-          if [ -z "${ARGS}" ]; then
-            ARGS='{}'
-          fi
-          echo "extra-args=$(echo "${ARGS}" | jq -c '. + {"detect-race": true}')" >> "$GITHUB_OUTPUT"
+          # Ariane sends a trigger's capture as a JSON string such as " all-tests=true", callers an object, schedule nothing.
+          ARGS=$(jq -Rsc '. as $raw | (try fromjson catch $raw) | if type == "object" then . elif type == "string" and contains("=") then (gsub("^\\s+|\\s+$"; "") | split("=") | {(.[0]): .[1]}) else {} end | . + {"detect-race": true}' <<< "${EXTRA_ARGS}")
+          echo "extra-args=${ARGS}" >> "$GITHUB_OUTPUT"
 
   conformance-ginkgo-race:
     name: Conformance Ginkgo with Race Detection

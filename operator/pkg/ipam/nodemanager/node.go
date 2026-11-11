@@ -235,7 +235,7 @@ type IPStatistics struct {
 	InterfaceCandidates int
 
 	// AssignedStaticIP is the static IP address assigned to the node (ex: public Elastic IP address in AWS)
-	AssignedStaticIP string
+	AssignedStaticIP netip.Addr
 }
 
 // IsRunning returns true if the node is considered to be running
@@ -328,28 +328,6 @@ func (n *Node) getStaticIPTags() ipamTypes.Tags {
 		return n.resource.Spec.IPAM.StaticIPTags
 	}
 	return ipamTypes.Tags{}
-}
-
-// staticIPNeedsResolution reports whether the recorded static IP needs to be
-// (re)resolved through the cloud provider. This is the case when no IP has been
-// assigned yet, or when the stored value is not a valid IP address.
-//
-// The latter handles a migration: earlier operator versions persisted the Azure
-// public IP prefix/address resource ID as a placeholder instead of the actual
-// address. Such legacy values fail to parse as an IP, so they are re-resolved
-// and overwritten with the real address on the next maintenance run. Providers
-// that already record an IP (e.g. AWS) parse cleanly and are left untouched.
-//
-// TODO: the non-IP (resource ID) branch only exists to migrate values persisted
-// by 1.19 azure operators and can be removed in 1.21, once all AssignedStaticIP
-// values are guaranteed to have been updated to actual IP addresses by 1.20
-// operators.
-func staticIPNeedsResolution(assignedStaticIP string) bool {
-	if assignedStaticIP == "" {
-		return true
-	}
-	_, err := netip.ParseAddr(assignedStaticIP)
-	return err != nil
 }
 
 // GetNeededAddresses returns the number of needed addresses that need to be
@@ -461,6 +439,19 @@ func (n *Node) isMultiPoolNodeLocked() bool {
 	return hasPoolRequest && len(n.resource.Status.IPAM.Used) == 0
 }
 
+// isIPv6OnlyNodeLocked returns true if this node's agent uses the multi-pool
+// allocator with IPv4 disabled. With IPv4 enabled, the agent always requests
+// at least PreAllocate IPv4 addresses, which is never 0, so a request for no
+// IPv4 and some IPv6 addresses can only come from an IPv6-only agent. Caller
+// must hold n.mutex (at least RLock).
+func (n *Node) isIPv6OnlyNodeLocked() bool {
+	if !n.isMultiPoolNodeLocked() {
+		return false
+	}
+	requestedIPv4, requestedIPv6, _ := poolRequestedIPs(n.resource)
+	return requestedIPv4 == 0 && requestedIPv6 > 0
+}
+
 // trackMultiPoolAllocatedLocked updates previousAllocatedCIDRs and detects
 // CIDRs the agent has removed from Spec.IPAM.Pools.Allocated. Removed CIDRs
 // are added to multiPoolCIDRsMarkedForRelease with the current timestamp.
@@ -533,18 +524,12 @@ func (n *Node) trackMultiPoolAllocatedLocked() {
 // has elapsed.
 func (n *Node) handleMultiPoolCIDRRelease(ctx context.Context) (bool, error) {
 	n.mutex.Lock()
-	if !n.isMultiPoolNodeLocked() || len(n.multiPoolCIDRsMarkedForRelease) == 0 {
+	if !n.isMultiPoolNodeLocked() || len(n.multiPoolCIDRsMarkedForRelease) == 0 || !n.resyncNeeded.IsZero() {
 		n.mutex.Unlock()
 		return false, nil
 	}
 
-	now := time.Now()
-	var readyCIDRs []netip.Prefix
-	for cidr, ts := range n.multiPoolCIDRsMarkedForRelease {
-		if now.Sub(ts) >= n.excessIPReleaseDelay {
-			readyCIDRs = append(readyCIDRs, cidr)
-		}
-	}
+	readyCIDRs := n.readyMultiPoolCIDRsLocked()
 	n.mutex.Unlock()
 
 	if len(readyCIDRs) == 0 {
@@ -553,11 +538,26 @@ func (n *Node) handleMultiPoolCIDRRelease(ctx context.Context) (bool, error) {
 
 	scopedLog := n.logger.Load()
 	actions := n.ops.PrepareCIDRRelease(readyCIDRs)
+
+	eligible := sets.New[netip.Prefix]()
+	for _, action := range actions {
+		eligible.Insert(action.CIDRsToRelease...)
+	}
+	n.mutex.Lock()
+	now := time.Now()
+	for _, cidr := range readyCIDRs {
+		if _, ok := n.multiPoolCIDRsMarkedForRelease[cidr]; ok && !eligible.Has(cidr) {
+			n.multiPoolCIDRsMarkedForRelease[cidr] = now
+		}
+	}
+	n.mutex.Unlock()
+
 	if len(actions) == 0 {
 		return false, nil
 	}
 
 	mutated := false
+	releasedAddrs := 0
 	for _, action := range actions {
 		// Re-check membership in multiPoolCIDRsMarkedForRelease immediately
 		// before each EC2 release. The agent may have re-added a CIDR to
@@ -566,9 +566,10 @@ func (n *Node) handleMultiPoolCIDRRelease(ctx context.Context) (bool, error) {
 		// map. Detaching it would leave the agent's view inconsistent with
 		// the ENI state.
 		n.mutex.Lock()
+		releasable := capMultiPoolCIDRs(n.readyMultiPoolCIDRsLocked(), n.stats.IPv4.ExcessIPs-releasedAddrs)
 		filtered := action.CIDRsToRelease[:0]
 		for _, cidr := range action.CIDRsToRelease {
-			if _, ok := n.multiPoolCIDRsMarkedForRelease[cidr]; ok {
+			if slices.Contains(releasable, cidr) {
 				filtered = append(filtered, cidr)
 			}
 		}
@@ -588,6 +589,10 @@ func (n *Node) handleMultiPoolCIDRRelease(ctx context.Context) (bool, error) {
 		n.mutex.Lock()
 		for _, cidr := range released {
 			delete(n.multiPoolCIDRsMarkedForRelease, cidr)
+			releasedAddrs += multiPoolCIDRSize(cidr)
+		}
+		if len(released) > 0 || err != nil {
+			n.resyncNeeded = time.Now()
 		}
 		n.mutex.Unlock()
 		if len(released) > 0 {
@@ -604,6 +609,38 @@ func (n *Node) handleMultiPoolCIDRRelease(ctx context.Context) (bool, error) {
 	}
 
 	return mutated, nil
+}
+
+func (n *Node) readyMultiPoolCIDRsLocked() []netip.Prefix {
+	now := time.Now()
+	var ready []netip.Prefix
+	for cidr, ts := range n.multiPoolCIDRsMarkedForRelease {
+		if now.Sub(ts) >= n.excessIPReleaseDelay {
+			ready = append(ready, cidr)
+		}
+	}
+	slices.SortFunc(ready, func(a, b netip.Prefix) int {
+		if c := n.multiPoolCIDRsMarkedForRelease[a].Compare(n.multiPoolCIDRsMarkedForRelease[b]); c != 0 {
+			return c
+		}
+		return a.Compare(b)
+	})
+	return ready
+}
+
+func capMultiPoolCIDRs(cidrs []netip.Prefix, budget int) []netip.Prefix {
+	capped := cidrs[:0]
+	for _, cidr := range cidrs {
+		if size := multiPoolCIDRSize(cidr); size <= budget {
+			budget -= size
+			capped = append(capped, cidr)
+		}
+	}
+	return capped
+}
+
+func multiPoolCIDRSize(cidr netip.Prefix) int {
+	return 1 << (cidr.Addr().BitLen() - cidr.Bits())
 }
 
 func (n *Node) requirePoolMaintenance() {
@@ -704,21 +741,31 @@ func (n *Node) recalculate(ctx context.Context) {
 	n.instanceSyncRetriggered = false
 
 	n.ipv4Alloc.available = a
-	if stats.AssignedStaticIP != "" {
+	if stats.AssignedStaticIP.IsValid() {
 		n.stats.IPv4.AssignedStaticIP = stats.AssignedStaticIP
-	} else if n.stats.IPv4.AssignedStaticIP == "" && n.resource != nil {
-		n.stats.IPv4.AssignedStaticIP = n.resource.Status.IPAM.AssignedStaticIP
+	} else if !n.stats.IPv4.AssignedStaticIP.IsValid() && n.resource != nil {
+		n.stats.IPv4.AssignedStaticIP = n.resource.Status.IPAM.AssignedStaticIP.Addr
 	}
 
+	// The AllocationMap lists the addresses available for assignment, but not
+	// the addresses of delegated prefixes, so the IPv4 prefixes reported by
+	// GetAttachedCIDRs are counted on top of it. Single attached addresses
+	// are left to the AllocationMap, since providers may report addresses
+	// that are attached but not available for assignment.
 	n.stats.IPv4.AvailableIPs = len(n.ipv4Alloc.available)
+	for _, c := range n.ops.GetAttachedCIDRs() {
+		if c.Addr().Is4() && c.Bits() < 32 {
+			n.stats.IPv4.AvailableIPs += 1 << (32 - c.Bits())
+		}
+	}
 	n.stats.IPv4.RemainingInterfaces = stats.RemainingAvailableInterfaceCount
 	n.stats.IPv4.Capacity = stats.NodeCapacity
 	n.stats.IPv6.AvailablePrefixes = stats.NodeIPv6Prefixes
 
 	// Agents using the cloud multi-pool allocator write their demand to
-	// Spec.IPAM.Pools.Requested and stop writing Status.IPAM.Used. Older agents
-	// still use the CRD allocator and communicate their IP usage through
-	// Status.IPAM.Used. Both branches are retained for rolling upgrades and
+	// Spec.IPAM.Pools.Requested and stop writing Status.IPAM.Used. Agents
+	// using the CRD allocator (Azure v1.20, AlibabaCloud) communicate their IP usage
+	// through Status.IPAM.Used. Both branches are retained for rolling upgrades and
 	// downgrades.
 	if requestedIPv4, requestedIPv6, ok := poolRequestedIPs(n.resource); ok && len(n.resource.Status.IPAM.Used) == 0 {
 		// The agent's demand is computed as inUse + preAllocate (linear
@@ -734,8 +781,13 @@ func (n *Node) recalculate(ctx context.Context) {
 	} else {
 		n.stats.IPv4.UsedIPs = len(n.resource.Status.IPAM.Used)
 	}
-	n.stats.IPv4.NeededIPs = calculateNeededIPs(n.stats.IPv4.AvailableIPs, n.stats.IPv4.UsedIPs, n.getPreAllocate(), n.getMinAllocate(), n.getMaxAllocate())
-	n.stats.IPv4.ExcessIPs = calculateExcessIPs(n.stats.IPv4.AvailableIPs, n.stats.IPv4.UsedIPs, n.getPreAllocate(), n.getMinAllocate(), n.getMaxAboveWatermark())
+	if n.isIPv6OnlyNodeLocked() {
+		n.stats.IPv4.NeededIPs = 0
+		n.stats.IPv4.ExcessIPs = 0
+	} else {
+		n.stats.IPv4.NeededIPs = calculateNeededIPs(n.stats.IPv4.AvailableIPs, n.stats.IPv4.UsedIPs, n.getPreAllocate(), n.getMinAllocate(), n.getMaxAllocate())
+		n.stats.IPv4.ExcessIPs = calculateExcessIPs(n.stats.IPv4.AvailableIPs, n.stats.IPv4.UsedIPs, n.getPreAllocate(), n.getMinAllocate(), n.getMaxAboveWatermark())
+	}
 
 	scopedLog.Debug(
 		"Recalculated needed addresses",
@@ -765,7 +817,7 @@ func (n *Node) allocationNeeded() bool {
 		return false
 	}
 
-	if len(n.getStaticIPTags()) > 0 && staticIPNeedsResolution(n.stats.IPv4.AssignedStaticIP) {
+	if len(n.getStaticIPTags()) > 0 && !n.stats.IPv4.AssignedStaticIP.IsValid() {
 		return true
 	}
 
@@ -775,21 +827,20 @@ func (n *Node) allocationNeeded() bool {
 // releaseNeeded returns true if this node requires IPs to be released
 func (n *Node) releaseNeeded() (needed bool) {
 	n.mutex.RLock()
-	needed = n.manager.releaseExcessIPs && !n.waitingForPoolMaintenance && n.resyncNeeded.IsZero() && n.stats.IPv4.ExcessIPs > 0
+	defer n.mutex.RUnlock()
+
+	canRelease := n.manager.releaseExcessIPs && !n.waitingForPoolMaintenance && n.resyncNeeded.IsZero()
+	if canRelease {
+		if n.isMultiPoolNodeLocked() {
+			needed = len(capMultiPoolCIDRs(n.readyMultiPoolCIDRsLocked(), n.stats.IPv4.ExcessIPs)) > 0
+		} else {
+			needed = n.stats.IPv4.ExcessIPs > 0
+		}
+	}
 	if n.resource != nil {
 		releaseInProgress := len(n.resource.Status.IPAM.ReleaseIPs) > 0
 		needed = needed || releaseInProgress
 	}
-	if !needed && len(n.multiPoolCIDRsMarkedForRelease) > 0 {
-		now := time.Now()
-		for _, ts := range n.multiPoolCIDRsMarkedForRelease {
-			if now.Sub(ts) >= n.excessIPReleaseDelay {
-				needed = true
-				break
-			}
-		}
-	}
-	n.mutex.RUnlock()
 	return
 }
 
@@ -974,6 +1025,7 @@ func (n *Node) determineMaintenanceAction() (*maintenanceAction, error) {
 	// handled by handleMultiPoolCIDRRelease.
 	n.mutex.RLock()
 	isMultiPool := n.isMultiPoolNodeLocked()
+	ipv6Only := n.isIPv6OnlyNodeLocked()
 	n.mutex.RUnlock()
 	if !isMultiPool && n.manager.releaseExcessIPs && stats.IPv4.ExcessIPs > 0 {
 		a.release = n.ops.PrepareIPRelease(stats.IPv4.ExcessIPs, n.logger.Load())
@@ -993,24 +1045,25 @@ func (n *Node) determineMaintenanceAction() (*maintenanceAction, error) {
 		return nil, err
 	}
 
-	surgeAllocate := 0
-	numPendingPods, err := getPendingPodCount(n.name)
-	if err != nil {
-		if n.logLimiter.Allow() {
-			n.logger.Load().Warn(
-				"Unable to compute pending pods, will not surge-allocate",
-				logfields.Error, err,
-			)
+	if !ipv6Only {
+		surgeAllocate := 0
+		numPendingPods, err := getPendingPodCount(n.name)
+		if err != nil {
+			if n.logLimiter.Allow() {
+				n.logger.Load().Warn(
+					"Unable to compute pending pods, will not surge-allocate",
+					logfields.Error, err,
+				)
+			}
+		} else if numPendingPods > stats.IPv4.NeededIPs {
+			surgeAllocate = numPendingPods - stats.IPv4.NeededIPs
 		}
-	} else if numPendingPods > stats.IPv4.NeededIPs {
-		surgeAllocate = numPendingPods - stats.IPv4.NeededIPs
+		n.mutex.RLock()
+		// handleIPAllocation() takes a min of MaxIPsToAllocate and IPs available for allocation on the interface.
+		// This makes sure we don't try to allocate more than what's available.
+		a.allocation.IPv4.MaxIPsToAllocate = stats.IPv4.NeededIPs + n.getMaxAboveWatermark() + surgeAllocate
+		n.mutex.RUnlock()
 	}
-
-	n.mutex.RLock()
-	// handleIPAllocation() takes a min of MaxIPsToAllocate and IPs available for allocation on the interface.
-	// This makes sure we don't try to allocate more than what's available.
-	a.allocation.IPv4.MaxIPsToAllocate = stats.IPv4.NeededIPs + n.getMaxAboveWatermark() + surgeAllocate
-	n.mutex.RUnlock()
 
 	a.allocation.IPv6.MaxPrefixesToAllocate = stats.IPv6.NeededPrefixes
 
@@ -1312,14 +1365,14 @@ func (n *Node) maintainIPPool(ctx context.Context) (instanceMutated bool, err er
 	if len(n.getStaticIPTags()) > 0 {
 		nodeStats := n.Stats()
 
-		if staticIPNeedsResolution(nodeStats.IPv4.AssignedStaticIP) {
-			ip, err := n.ops.AllocateStaticIP(ctx, n.getStaticIPTags())
+		if !nodeStats.IPv4.AssignedStaticIP.IsValid() {
+			addr, err := n.ops.AllocateStaticIP(ctx, n.getStaticIPTags())
 			if err != nil {
 				return false, err
 			}
 
 			n.mutex.Lock()
-			n.stats.IPv4.AssignedStaticIP = ip
+			n.stats.IPv4.AssignedStaticIP = addr
 			n.mutex.Unlock()
 		}
 	}
@@ -1418,7 +1471,11 @@ func (n *Node) MaintainIPPool(ctx context.Context) error {
 	}
 
 	instanceMutated, err := n.maintainIPPool(ctx)
-	if err == nil {
+	// The resync only guards the cache updates of a mutation against a resync
+	// that started before it. A pass that mutated nothing has nothing to
+	// guard, and requiring one anyway would hold allocationNeeded() and
+	// releaseNeeded() false until the next resync.
+	if instanceMutated {
 		n.logger.Load().Debug("Setting resync needed")
 		n.requireResync()
 	}
@@ -1474,8 +1531,8 @@ func (n *Node) PopulateIPReleaseStatus(node *v2.CiliumNode) {
 func (n *Node) PopulateStaticIPStatus(node *v2.CiliumNode) {
 	n.mutex.Lock()
 	defer n.mutex.Unlock()
-	if n.stats.IPv4.AssignedStaticIP != "" {
-		node.Status.IPAM.AssignedStaticIP = n.stats.IPv4.AssignedStaticIP
+	if n.stats.IPv4.AssignedStaticIP.IsValid() {
+		node.Status.IPAM.AssignedStaticIP = iputil.AddrFrom(n.stats.IPv4.AssignedStaticIP)
 	}
 }
 

@@ -6,6 +6,7 @@
 #include <bpf/config/node.h>
 
 #include "lib/common.h"
+#include "lib/config.h"
 #include "lib/ipv4.h"
 #include "lib/ipv6.h"
 #include "lib/l4.h"
@@ -33,23 +34,24 @@ enum {
 static __always_inline __u8
 cls_flag_tunnel()
 {
-#ifdef HAVE_ENCAP
+	if (!HAVE_ENCAP)
+		return 0;
+
 	if (CONFIG(tunnel_protocol) == TUNNEL_PROTOCOL_VXLAN)
 		return CLS_FLAG_VXLAN;
 	if (CONFIG(tunnel_protocol) == TUNNEL_PROTOCOL_GENEVE)
 		return CLS_FLAG_GENEVE;
-#endif
+
 	return 0;
 }
 
 static __always_inline bool
 is_tunnel_port(__be16 dport __maybe_unused)
 {
-#ifdef HAVE_ENCAP
+	if (!HAVE_ENCAP)
+		return false;
+
 	return dport == bpf_htons(CONFIG(tunnel_port));
-#else
-	return false;
-#endif
 }
 
 /**
@@ -62,7 +64,7 @@ is_tunnel_port(__be16 dport __maybe_unused)
 static __always_inline bool
 can_observe_overlay_mark(enum trace_point obs_point __maybe_unused)
 {
-	if (!is_defined(HAVE_ENCAP) || ctx_is_xdp())
+	if (!HAVE_ENCAP || ctx_is_xdp())
 		return false;
 
 	if (is_defined(IS_BPF_HOST) && (obs_point == TRACE_TO_NETWORK ||
@@ -82,17 +84,17 @@ can_observe_overlay_mark(enum trace_point obs_point __maybe_unused)
  *
  * Returns true whether the provided observation point can observe overlay traffic via raw packet
  * parsing of L2/L3/L4 headers. Such packets are traced in from-{netdev,wireguard}, and in to-stack
- * events with ENABLE_IPSEC (VinE).
+ * events with CONFIG(enable_ipsec) (VinE).
  */
 static __always_inline bool
 can_observe_overlay_hdr(enum trace_point obs_point)
 {
-	if (!is_defined(HAVE_ENCAP))
+	if (!HAVE_ENCAP)
 		return false;
 
 	if (is_defined(IS_BPF_HOST) && (obs_point == TRACE_FROM_NETWORK ||
 					obs_point == TRACE_POINT_UNKNOWN ||
-					(is_defined(ENABLE_IPSEC) && obs_point == TRACE_TO_STACK)))
+					(CONFIG(enable_ipsec) && obs_point == TRACE_TO_STACK)))
 		return true;
 
 	if (is_defined(IS_BPF_WIREGUARD) && (obs_point == TRACE_FROM_CRYPTO ||
@@ -113,36 +115,37 @@ can_observe_overlay_hdr(enum trace_point obs_point)
 static __always_inline bool
 ctx_is_overlay_hdr(const struct __ctx_buff *ctx, __be16 proto)
 {
-	void __maybe_unused *data;
-	void __maybe_unused *data_end;
-	struct ipv6hdr __maybe_unused *ip6;
+	void *data, *data_end;
+	struct ipv6hdr *ip6;
 	struct iphdr __maybe_unused *ip4;
 	__be16 dport;
 	__u8 l4_proto;
 	int l3_hdrlen;
 
-	if (!is_defined(HAVE_ENCAP))
+	if (!HAVE_ENCAP)
 		return false;
 
 	switch (proto) {
-#ifdef ENABLE_IPV6
 	case bpf_htons(ETH_P_IPV6):
+		if (!is_defined(ENABLE_IPV6))
+			return false;
+
 		if (!revalidate_data(ctx, &data, &data_end, &ip6))
 			return false;
 
 		l4_proto = ip6->nexthdr;
 		l3_hdrlen = sizeof(struct ipv6hdr);
 		break;
-#endif
-#ifdef ENABLE_IPV4
 	case bpf_htons(ETH_P_IP):
+		if (!is_defined(ENABLE_IPV4))
+			return false;
+
 		if (!revalidate_data(ctx, &data, &data_end, &ip4))
 			return false;
 
 		l4_proto = ip4->protocol;
 		l3_hdrlen = ipv4_hdrlen(ip4);
 		break;
-#endif
 	default:
 		return false;
 	}
@@ -180,13 +183,13 @@ ctx_is_encrypted_by_point(const struct __ctx_buff *ctx __maybe_unused,
 {
 #if __ctx_is == __ctx_skb
 	if (is_defined(IS_BPF_HOST) &&
-	    (is_defined(ENABLE_IPSEC) || is_defined(ENABLE_WIREGUARD)) &&
+	    (CONFIG(enable_ipsec) || CONFIG(enable_wireguard)) &&
 	    (obs_point == TRACE_FROM_NETWORK ||
 	     obs_point == TRACE_TO_NETWORK ||
 	     obs_point == TRACE_POINT_UNKNOWN))
 		return ctx_is_decrypt(ctx);
 
-	if (is_defined(IS_BPF_HOST) && is_defined(ENABLE_IPSEC) &&
+	if (is_defined(IS_BPF_HOST) && CONFIG(enable_ipsec) &&
 	    (obs_point == TRACE_FROM_STACK || obs_point == TRACE_POINT_UNKNOWN))
 		return ctx_is_encrypt(ctx);
 #endif

@@ -12,9 +12,7 @@
 
 /* Enable code paths under test */
 #define ENABLE_IPV4 1
-#define ENABLE_NODEPORT 1
 #define TUNNEL_MODE 1
-#define ENABLE_NODEPORT_ACCELERATION 1
 
 #define FRONTEND_IP_REMOTE	v4_svc_two
 #define FRONTEND_PORT		tcp_svc_one
@@ -54,11 +52,14 @@ long mock_fib_lookup(__maybe_unused struct __ctx_buff * volatile ctx,
 #include "lib/ipcache.h"
 #include "lib/lb.h"
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
 ASSIGN_CONFIG(bool, enable_bpf_host_routing, true)
 ASSIGN_CONFIG(__u32, interface_ifindex, DEFAULT_IFACE)
 ASSIGN_CONFIG(bool, supports_fib_lookup_src, true)
 ASSIGN_CONFIG(__u8, tunnel_protocol, TUNNEL_PROTOCOL_VXLAN)
 ASSIGN_CONFIG(__u16, tunnel_port, 8472)
+ASSIGN_CONFIG(bool, enable_nodeport_acceleration, true)
+ASSIGN_CONFIG(bool, enable_nodeport, true)
 
 /* Set port ranges to have deterministic source port selection */
 #include "nodeport_defaults.h"

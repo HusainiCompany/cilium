@@ -42,6 +42,8 @@ func Endpoint(ep endpoint.Config, lnc *Config) any {
 	cfg.EnableNoServiceEndpointsRoutable = lnc.SvcRouteConfig.EnableNoServiceEndpointsRoutable
 	cfg.EnableExtendedIPProtocols = option.Config.EnableExtendedIPProtocols
 	cfg.EnableNetkit = lnc.DatapathIsNetkit
+	cfg.EnableNAT46X64 = option.Config.NodePortNat46X64 && lnc.KPRConfig.KubeProxyReplacement
+	cfg.EnableNAT46X64Gateway = option.Config.EnableNat46X64Gateway && lnc.KPRConfig.KubeProxyReplacement
 
 	cfg.EnableVTEP = option.Config.EnableVTEP
 	if option.Config.EnableVTEP {
@@ -51,12 +53,19 @@ func Endpoint(ep endpoint.Config, lnc *Config) any {
 	cfg.AllowICMPFragNeeded = option.Config.AllowICMPFragNeeded
 	cfg.EnableICMPRule = option.Config.EnableICMPRules
 	cfg.EnableSIPVerification = ep.GetOptions().IsEnabled(option.SourceIPVerification)
-	cfg.EnableLRP = option.Config.EnableLocalRedirectPolicy
+	cfg.EnableLRP = lnc.EnableLocalRedirectPolicy
 
 	cfg.EphemeralMin = lnc.EphemeralMin
+	cfg.SNATCollisionRetries = lnc.SNATCollisionRetries
 
 	cfg.EnablePolicyAccounting = lnc.EnablePolicyAccounting
+	cfg.EnableTraceNotify = ep.GetOptions().IsEnabled(option.TraceNotify)
+	cfg.Debug = ep.GetOptions().IsEnabled(option.Debug)
+	cfg.DebugTagged = ep.GetOptions().IsEnabled(option.DebugTagged)
 	cfg.DebugLB = ep.GetOptions().IsEnabled(option.DebugLB)
+	cfg.EnablePolicyAuditMode = ep.GetOptions().IsEnabled(option.PolicyAuditMode)
+	cfg.EnableDropNotify = ep.GetOptions().IsEnabled(option.DropNotify)
+	cfg.EnablePolicyVerdictNotification = ep.GetOptions().IsEnabled(option.PolicyVerdictNotify)
 
 	cfg.MonitorAggregation = uint8(ep.GetOptions().GetValue(option.MonitorAggregation))
 
@@ -76,10 +85,13 @@ func Endpoint(ep endpoint.Config, lnc *Config) any {
 
 	cfg.HybridRoutingEnabled = option.Config.RoutingMode == option.RoutingModeHybrid
 
-	if lnc.KPRConfig.EnableSocketLB &&
-		!option.Config.UnsafeDaemonConfigOption.BPFSocketLBHostnsOnly {
-		cfg.EnableSocketLBFull = true
+	if lnc.KPRConfig.EnableSocketLB {
+		cfg.SocketLB.EnableFull = !option.Config.UnsafeDaemonConfigOption.BPFSocketLBHostnsOnly
+		cfg.SocketLB.HostNSOnly = option.Config.UnsafeDaemonConfigOption.BPFSocketLBHostnsOnly
+		cfg.SocketLB.EnableTracing = option.Config.UnsafeDaemonConfigOption.EnableSocketLBTracing
 	}
+
+	cfg.EnableBPFRouting = ep.RequireBPFRouting()
 
 	return cfg
 }

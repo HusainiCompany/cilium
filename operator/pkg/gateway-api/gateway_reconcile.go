@@ -18,9 +18,11 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	gateway_inf_ext "sigs.k8s.io/gateway-api-inference-extension/api/v1"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	controllerruntime "github.com/cilium/cilium/operator/pkg/controller-runtime"
+	"github.com/cilium/cilium/operator/pkg/gateway-api/helpers"
 	"github.com/cilium/cilium/operator/pkg/model/ingestion"
 	gatewayApiTranslation "github.com/cilium/cilium/operator/pkg/model/translation/gateway-api"
 	ciliumv2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
@@ -128,9 +130,17 @@ func (r *gatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		req.NamespacedName,
 		inputs.BackendTLSPolicies,
 		inputs.AttachedHTTPRoutes(gw),
+		inputs.AttachedGRPCRoutes(gw),
 	)
 	if err != nil {
 		return controllerruntime.Fail(fmt.Errorf("failed to update BackendTLSPolicy status: %w", err))
+	}
+
+	// Inferencepool status
+	if r.gatewayAPIInferenceExtensionEnabled {
+		if err := r.inferencePoolStatusManager.SetInferencePoolStatuses(ctx, scopedLog, req.NamespacedName, inputs.InferencePools, inputs.AttachedHTTPRoutes(gw)); err != nil {
+			return controllerruntime.Fail(fmt.Errorf("failed to update InferencePool status: %w", err))
+		}
 	}
 
 	listenerStatusResult, err := r.listenerStatusManager.SetListenerStatuses(ctx, gw, ListenerStatusInputs{
@@ -155,11 +165,41 @@ func (r *gatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	case ListenersStatusNoneValid:
 		setGatewayAccepted(gw, false, "No Accepted Listeners", gatewayv1.GatewayReasonListenersNotValid)
 		setGatewayProgrammed(gw, metav1.ConditionFalse, "No Accepted Listeners", gatewayv1.GatewayReasonListenersNotValid)
+		if err := r.ensureOwnedEnvoyConfigDeleted(ctx, gw); err != nil {
+			return controllerruntime.Fail(fmt.Errorf("failed to cleanup managed Gateway Envoy config: %w", err))
+		}
 		return r.handleReconcileErrorWithStatus(ctx, fmt.Errorf("no Accepted Listeners for Gateway"), original, gw)
 	case ListenersStatusValidWithUnsupportedProtocol:
 		setGatewayAccepted(gw, true, "Gateway has unsupported listeners", gatewayv1.GatewayReasonListenersNotValid)
 	case ListenersStatusSomeInvalid, ListenersStatusAllValid:
 		setGatewayAccepted(gw, true, "Gateway successfully scheduled", gatewayv1.GatewayReasonAccepted)
+	}
+
+	// if there are inferencepools, create the shadow service for them
+	if r.gatewayAPIInferenceExtensionEnabled && len(inputs.InferencePools) > 0 {
+		referencedInferecePools := referencedInferencePools(inputs.AttachedHTTPRoutes(gw), inputs.InferencePools)
+		for _, infPool := range referencedInferecePools {
+			// get the shadow service for that inference pool
+			infPoolSvc := helpers.DesiredShadowService(infPool)
+
+			// check that there is no existing service of the same name
+			existingSvc := &corev1.Service{}
+			key := types.NamespacedName{Namespace: infPoolSvc.Namespace, Name: infPoolSvc.Name}
+			switch err := r.client.Get(ctx, key, existingSvc); {
+			case k8serrors.IsNotFound(err):
+				// No existing Service; safe to create below.
+			case err != nil:
+				return r.handleReconcileErrorWithStatus(ctx, fmt.Errorf("failed to check for an existing shadow Service %s: %w", key, err), original, gw)
+			case !isOwnedByInferencePool(existingSvc, infPool):
+				return r.handleReconcileErrorWithStatus(ctx, fmt.Errorf("a Service %s already exists and is not owned by InferencePool %s/%s; refusing to overwrite it", key, infPool.Namespace, infPool.Name), original, gw)
+			}
+
+			if err := r.ensureService(ctx, infPoolSvc); err != nil {
+				// update the inference pool status
+				return r.handleReconcileErrorWithStatus(ctx, fmt.Errorf("failed to create the inference pool Service resource: %w", err), original, gw)
+			}
+
+		}
 	}
 
 	// Step 3: Ingest loaded and validated resources into internal model
@@ -177,6 +217,7 @@ func (r *gatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		ReferenceGrants:     inputs.ReferenceGrants,
 		BackendTLSPolicyMap: btlspStatusMap,
 		MergedListeners:     listenerStatusResult.MergedAndValidListeners,
+		InferencePools:      inputs.InferencePools,
 	})
 
 	// Step 4: Translate the listeners into Cilium model
@@ -477,6 +518,7 @@ func (r *gatewayReconciler) updateStatus(ctx context.Context, original *gatewayv
 	}
 	return r.client.Status().Update(ctx, new)
 }
+
 func (r *gatewayReconciler) handleReconcileErrorWithStatus(ctx context.Context, reconcileErr error, original *gatewayv1.Gateway, modified *gatewayv1.Gateway) (ctrl.Result, error) {
 	if err := r.updateStatus(ctx, original, modified); err != nil {
 		return controllerruntime.Fail(fmt.Errorf("failed to update Gateway status while handling the reconcile error: %w: %w", reconcileErr, err))
@@ -495,4 +537,51 @@ func (r *gatewayReconciler) updateStatusAndSuccess(ctx context.Context, original
 	}
 
 	return controllerruntime.Success()
+}
+
+// referencedInferencePools returns the []InferencePools that are referenced in the backendRef of
+// at least one of the HTTPRoutes for the given gateway that is getting reconciled
+func referencedInferencePools(httpRoutes []gatewayv1.HTTPRoute, infPools []gateway_inf_ext.InferencePool) []*gateway_inf_ext.InferencePool {
+	poolsByKey := make(map[types.NamespacedName]*gateway_inf_ext.InferencePool, len(infPools))
+
+	for _, pool := range infPools {
+		poolsByKey[types.NamespacedName{Namespace: pool.Namespace, Name: pool.Name}] = &pool
+	}
+
+	seen := make(map[types.NamespacedName]struct{})
+	var referencedInfPools []*gateway_inf_ext.InferencePool
+	for _, hr := range httpRoutes {
+		for _, rule := range hr.Spec.Rules {
+			for _, br := range rule.BackendRefs {
+				if !helpers.IsInferencePool(br.BackendObjectReference) {
+					continue
+				}
+				key := types.NamespacedName{
+					Namespace: helpers.NamespaceDerefOr(br.Namespace, hr.Namespace),
+					Name:      string(br.Name),
+				}
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				if pool, ok := poolsByKey[key]; ok {
+					seen[key] = struct{}{}
+					referencedInfPools = append(referencedInfPools, pool)
+				}
+			}
+		}
+	}
+	return referencedInfPools
+}
+
+// isOwnedByInferencePool reports whether svc carries the owner reference that
+// helpers.DesiredShadowService stamps for the given InferencePool. The shadow
+// Service name is derived from the pool name, so matching on kind+name identifies
+// a Service we own versus a pre-existing, unrelated one.
+func isOwnedByInferencePool(svc *corev1.Service, pool *gateway_inf_ext.InferencePool) bool {
+	for _, ref := range svc.OwnerReferences {
+		if ref.Kind == "InferencePool" && ref.Name == pool.Name {
+			return true
+		}
+	}
+	return false
 }

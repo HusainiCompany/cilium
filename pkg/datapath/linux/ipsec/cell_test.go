@@ -32,6 +32,7 @@ import (
 	"github.com/cilium/cilium/pkg/endpoint/regeneration"
 	envoy "github.com/cilium/cilium/pkg/envoy/config"
 	"github.com/cilium/cilium/pkg/hive"
+	iputil "github.com/cilium/cilium/pkg/ip"
 	"github.com/cilium/cilium/pkg/ipcache"
 	k8sClient "github.com/cilium/cilium/pkg/k8s/client/testutils"
 	k8sSynced "github.com/cilium/cilium/pkg/k8s/synced"
@@ -46,7 +47,7 @@ import (
 	"github.com/cilium/cilium/pkg/mtu"
 	"github.com/cilium/cilium/pkg/node"
 	"github.com/cilium/cilium/pkg/node/addressing"
-	nodeManager "github.com/cilium/cilium/pkg/node/manager"
+	nodePolicy "github.com/cilium/cilium/pkg/node/policy"
 	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/nodediscovery"
 	"github.com/cilium/cilium/pkg/option"
@@ -161,7 +162,7 @@ func TestPrivileged_TestIPSecCell(t *testing.T) {
 		return hive.New(
 			mtu.Cell,
 			encrypt.Cell,
-			nodeManager.Cell,
+			nodePolicy.Cell,
 			nodediscovery.Cell,
 			source.Cell,
 			watchers.Cell,
@@ -215,7 +216,7 @@ func TestPrivileged_TestIPSecCell(t *testing.T) {
 								IPAddresses: []nodeTypes.Address{
 									{
 										Type: addressing.NodeInternalIP,
-										IP:   k8s1NodeIPv4,
+										IP:   iputil.AddrFrom(iputil.AddrFromIP(k8s1NodeIPv4)),
 									},
 								},
 								Annotations: map[string]string{},

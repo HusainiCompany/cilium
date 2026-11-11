@@ -49,7 +49,7 @@ import (
 	"github.com/cilium/cilium/operator/pkg/kvstore/locksweeper"
 	"github.com/cilium/cilium/operator/pkg/kvstore/nodesgc"
 	"github.com/cilium/cilium/operator/pkg/lbipam"
-	networkdriverconfig "github.com/cilium/cilium/operator/pkg/networkdriver/config"
+	"github.com/cilium/cilium/operator/pkg/networkdriver"
 	"github.com/cilium/cilium/operator/pkg/networkpolicy"
 	"github.com/cilium/cilium/operator/pkg/nodeipam"
 	"github.com/cilium/cilium/operator/pkg/secretsync"
@@ -58,6 +58,7 @@ import (
 	operatorWatchers "github.com/cilium/cilium/operator/watchers"
 	clustercfgcell "github.com/cilium/cilium/pkg/clustermesh/clustercfg/cell"
 	"github.com/cilium/cilium/pkg/clustermesh/endpointslicesync"
+	endpointslicesynclegacy "github.com/cilium/cilium/pkg/clustermesh/endpointslicesync/legacy"
 	"github.com/cilium/cilium/pkg/clustermesh/mcsapi"
 	cmoperator "github.com/cilium/cilium/pkg/clustermesh/operator"
 	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
@@ -76,6 +77,7 @@ import (
 	"github.com/cilium/cilium/pkg/kvstore"
 	"github.com/cilium/cilium/pkg/kvstore/heartbeat"
 	"github.com/cilium/cilium/pkg/kvstore/store"
+	"github.com/cilium/cilium/pkg/loadbalancer/redirectpolicy"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/metrics"
@@ -208,6 +210,7 @@ var (
 	ControlPlaneLeaderCells = []cell.Cell{
 		// The CRDs registration should be the first operation to be invoked after the operator is elected leader.
 		apis.RegisterCRDsCell,
+		redirectpolicy.OperatorCell,
 		operatorK8s.ResourcesCell,
 
 		// Updates the heartbeat key in the kvstore.
@@ -223,6 +226,7 @@ var (
 		nodeipam.Cell,
 		store.Cell,
 		cmoperator.Cell,
+		endpointslicesynclegacy.Cell,
 		endpointslicesync.Cell,
 		mcsapi.Cell,
 		locksweeper.Cell,
@@ -337,7 +341,9 @@ var (
 		// is specified.
 		ztunnel.Cell,
 
-		networkdriverconfig.Cell,
+		// Manage the Network Driver configuration via custom resources and
+		// delegate Resource IPAM CIDRs to nodes.
+		networkdriver.Cell,
 	}
 
 	binaryName = filepath.Base(os.Args[0])

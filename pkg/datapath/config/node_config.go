@@ -26,29 +26,61 @@ type Node struct {
 	ClusterID uint32 `config:"cluster_id"`
 	// Number of bits of the identity reserved for the Cluster ID.
 	ClusterIDBits uint32 `config:"cluster_id_bits"`
+	// DSR-specific configuration.
+	DSRCfg types.DSRConfig `config:"dsr_cfg"`
+	// Enable debugging trace statements.
+	Debug bool `config:"debug"`
 	// Enable debugging trace statements for load balancer.
 	DebugLB bool `config:"debug_lb"`
+	// Enable debugging trace statements for tagged packets.
+	DebugTagged bool `config:"debug_tagged"`
 	// Index of the interface used to connect nodes in the cluster.
 	DirectRoutingDevIfIndex uint32 `config:"direct_routing_dev_ifindex"`
 	// Enable BPF Host Routing.
 	EnableBPFHostRouting bool `config:"enable_bpf_host_routing"`
 	// Enable per flow (conntrack) statistics.
 	EnableConntrackAccounting bool `config:"enable_conntrack_accounting"`
+	// Enable drop notifications.
+	EnableDropNotify bool `config:"enable_drop_notify"`
 	// Enable per endpoint routes.
 	EnableEndpointRoutes bool `config:"enable_endpoint_routes"`
+	// Enable host firewall.
+	EnableHostFirewall bool `config:"enable_host_firewall"`
 	// Terminate inbound IPIP/IP6IP6 in BPF on netdev ingress for local endpoint
 	// outer dst.
 	EnableIPIPTermination bool `config:"enable_ipip_termination"`
+	// Enable ip-masq-agent for IPv4 traffic.
+	EnableIPMasqAgentIPv4 bool `config:"enable_ip_masq_agent_ipv4"`
+	// Enable ip-masq-agent for IPv6 traffic.
+	EnableIPMasqAgentIPv6 bool `config:"enable_ip_masq_agent_ipv6"`
+	// Enable IPSec support.
+	EnableIPSec bool `config:"enable_ipsec"`
+	// Enable IPv4 support.
+	EnableIPv4 bool `config:"enable_ipv4"`
 	// Enable setting identity mark for local traffic.
 	EnableIdentityMark bool `config:"enable_identity_mark"`
 	// Use jiffies (count of timer ticks since boot).
 	EnableJiffies bool `config:"enable_jiffies"`
+	// Enable L7 load-balancing support.
+	EnableL7LB bool `config:"enable_l7_lb"`
+	// Enable BPF masquerading for IPv4 traffic.
+	EnableMasqueradeIPv4 bool `config:"enable_masquerade_ipv4"`
+	// Masquerade IPv6 traffic.
+	EnableMasqueradeIPv6 bool `config:"enable_masquerade_ipv6"`
+	// Enable Nodeport support.
+	EnableNodeport bool `config:"enable_nodeport"`
+	// Enable NodePort acceleration via XDP.
+	EnableNodeportAcceleration bool `config:"enable_nodeport_acceleration"`
 	// Enable dynamic source IP resolution for SNAT via linux's routing table.
 	EnableNodeportSourceLookup bool `config:"enable_nodeport_source_lookup"`
 	// Enable SCTP support.
 	EnableSCTP bool `config:"enable_sctp"`
 	// Enable BPF-based proxy redirection.
 	EnableTproxy bool `config:"enable_tproxy"`
+	// Enable trace notifications.
+	EnableTraceNotify bool `config:"enable_trace_notify"`
+	// Enable Wireguard support.
+	EnableWireguard bool `config:"enable_wireguard"`
 	// Interface index of the IPv4 IPIP encapsulation device.
 	Encap4IfIndex uint32 `config:"encap4_ifindex"`
 	// Interface index of the IPv6 IPIP encapsulation device.
@@ -102,6 +134,8 @@ type Node struct {
 	RouterIPv4 types.V4Addr `config:"router_ipv4"`
 	// Internal IPv6 router address assigned to the cilium_host interface.
 	RouterIPv6 types.V6Addr `config:"router_ipv6"`
+	// SRv6-specific configuration.
+	SRv6Cfg types.SRv6Config `config:"srv6_cfg"`
 	// IPv4 source address used for SNAT when a Pod talks to itself over a Service.
 	ServiceLoopbackIPv4 types.V4Addr `config:"service_loopback_ipv4"`
 	// IPv6 source address used for SNAT when a Pod talks to itself over a Service.
@@ -124,8 +158,11 @@ func NewNode() *Node {
 		cast[types.MACAddr]([]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}),
 		0x0,
 		cast[types.MACAddr]([]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}),
-		0x0, 0x8, false, 0x0, false, false, false, false, false, false,
-		false, false, false, 0x0, 0x0, false, 0x0, 0x0, 0x0, 0x0, cast[types.V4Addr]([]byte{0x0, 0x0, 0x0, 0x0}),
+		0x0, 0x8, cast[types.DSRConfig]([]byte{0x0, 0x0, 0x0}), false,
+		false, false, 0x0, false, false, false, false, false, false,
+		false, false, false, false, false, false, false, false, false,
+		false, false, false, false, false, false, false, 0x0, 0x0,
+		false, 0x0, 0x0, 0x0, 0x0, cast[types.V4Addr]([]byte{0x0, 0x0, 0x0, 0x0}),
 		cast[types.V4Addr]([]byte{0x0, 0x0, 0x0, 0x0}),
 		cast[types.IPv4SNATExclusionPrefix]([]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}),
 		cast[types.V6Addr]([]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}),
@@ -133,7 +170,7 @@ func NewNode() *Node {
 		0x0, 0x1, false, 0x0, 0xff, 0x5, cast[types.V4Addr]([]byte{0x0, 0x0, 0x0, 0x0}),
 		0x0, 0x0, 0x0, 0x0, false, cast[types.V4Addr]([]byte{0x0, 0x0, 0x0, 0x0}),
 		cast[types.V6Addr]([]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}),
-		cast[types.V4Addr]([]byte{0x0, 0x0, 0x0, 0x0}),
+		cast[types.SRv6Config]([]byte{0x0, 0x0}), cast[types.V4Addr]([]byte{0x0, 0x0, 0x0, 0x0}),
 		cast[types.V6Addr]([]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}),
 		false, false, 0x0, 0x0, 0x0}
 }

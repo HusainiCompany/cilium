@@ -19,6 +19,7 @@ import (
 	"github.com/cilium/hive/hivetest"
 	"github.com/cilium/hive/job"
 	"github.com/cilium/statedb"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
@@ -124,7 +125,7 @@ func Test_MultiPoolManager(t *testing.T) {
 		})
 		assert.NoError(t, err)
 
-		mgr := newMultiPoolManager(MultiPoolManagerParams{
+		mgr := NewMultiPoolManager(MultiPoolManagerParams{
 			Logger:               hivetest.Logger(t),
 			IPv4Enabled:          true,
 			IPv6Enabled:          true,
@@ -210,12 +211,12 @@ func Test_MultiPoolManager(t *testing.T) {
 		mgr.waitForAllPools()
 
 		// test allocation in default pool
-		defaultAllocation, err := mgr.allocateIP(netip.MustParseAddr("10.0.22.1"), "default-pod-1", "default", IPv4, false)
+		defaultAllocation, err := mgr.AllocateIP(netip.MustParseAddr("10.0.22.1"), "default-pod-1", "default", IPv4, false)
 		assert.NoError(t, err)
 		assert.Equal(t, netip.MustParseAddr("10.0.22.1"), defaultAllocation.IP)
 
 		// cannot allocate the same IP twice
-		faultyAllocation, err := mgr.allocateIP(netip.MustParseAddr("10.0.22.1"), "default-pod-1", "default", IPv4, false)
+		faultyAllocation, err := mgr.AllocateIP(netip.MustParseAddr("10.0.22.1"), "default-pod-1", "default", IPv4, false)
 		assert.ErrorIs(t, err, ipallocator.ErrAllocated)
 		assert.Nil(t, faultyAllocation)
 
@@ -223,10 +224,10 @@ func Test_MultiPoolManager(t *testing.T) {
 		jupiterIPv4CIDR := netip.MustParsePrefix("192.168.1.0/16")
 		juptierIPv6CIDR := netip.MustParsePrefix("fc00:33::/96")
 
-		faultyAllocation, err = mgr.allocateIP(netip.MustParseAddr("192.168.1.1"), "jupiter-pod-0", "jupiter", IPv4, false)
+		faultyAllocation, err = mgr.AllocateIP(netip.MustParseAddr("192.168.1.1"), "jupiter-pod-0", "jupiter", IPv4, false)
 		assert.ErrorIs(t, err, &ErrPoolNotReadyYet{})
 		assert.Nil(t, faultyAllocation)
-		faultyAllocation, err = mgr.allocateNext("jupiter-pod-1", "jupiter", IPv6, false)
+		faultyAllocation, err = mgr.AllocateNext("jupiter-pod-1", "jupiter", IPv6, false)
 		assert.ErrorIs(t, err, &ErrPoolNotReadyYet{})
 		assert.Nil(t, faultyAllocation)
 
@@ -234,7 +235,7 @@ func Test_MultiPoolManager(t *testing.T) {
 		// (since the owner has already attempted to allocate). This however sets
 		// upstreamSync to 'true', which should populate .Spec.IPAM.Pools.Requested
 		// with pending requests for the "jupiter" pool
-		faultyAllocation, err = mgr.allocateNext("jupiter-pod-1", "jupiter", IPv6, true)
+		faultyAllocation, err = mgr.AllocateNext("jupiter-pod-1", "jupiter", IPv6, true)
 		assert.ErrorIs(t, err, &ErrPoolNotReadyYet{})
 		assert.Nil(t, faultyAllocation)
 
@@ -270,8 +271,8 @@ func Test_MultiPoolManager(t *testing.T) {
 			}, currentNode.Spec.IPAM.Pools.Requested)
 		}, timeout, tick)
 
-		mgr.restoreFinished(IPv4)
-		mgr.restoreFinished(IPv6)
+		mgr.RestoreFinished(IPv4)
+		mgr.RestoreFinished(IPv6)
 
 		// Assign the jupiter pool
 		currentNode, err = clientset.CiliumV2().CiliumNodes().Get(t.Context(), nodeTypes.GetName(), metav1.GetOptions{})
@@ -317,21 +318,21 @@ func Test_MultiPoolManager(t *testing.T) {
 
 		// Allocations should now succeed
 		jupiterIP0 := netip.MustParseAddr("192.168.1.1")
-		allocatedJupiterIP0, err := mgr.allocateIP(jupiterIP0, "jupiter-pod-0", "jupiter", IPv4, false)
+		allocatedJupiterIP0, err := mgr.AllocateIP(jupiterIP0, "jupiter-pod-0", "jupiter", IPv4, false)
 		require.NoError(t, err)
 		require.NotNil(t, allocatedJupiterIP0)
 		assert.Equal(t, jupiterIP0, allocatedJupiterIP0.IP)
 
-		allocatedJupiterIP1, err := mgr.allocateNext("jupiter-pod-1", "jupiter", IPv6, false)
+		allocatedJupiterIP1, err := mgr.AllocateNext("jupiter-pod-1", "jupiter", IPv6, false)
 		require.NoError(t, err)
 		require.NotNil(t, allocatedJupiterIP1)
 		assert.True(t, juptierIPv6CIDR.Contains(allocatedJupiterIP1.IP))
 
 		// Release IPs from jupiter pool. This should fully remove it from both
 		// "requested" and "allocated"
-		err = mgr.releaseIP(allocatedJupiterIP0.IP, "jupiter", IPv4, false)
+		err = mgr.ReleaseIP(allocatedJupiterIP0.IP, "jupiter", IPv4, false)
 		assert.NoError(t, err)
-		err = mgr.releaseIP(allocatedJupiterIP1.IP, "jupiter", IPv6, true) // triggers sync
+		err = mgr.ReleaseIP(allocatedJupiterIP1.IP, "jupiter", IPv6, true) // triggers sync
 		assert.NoError(t, err)
 
 		// Wait for agent to release jupiter and unused CIDRs
@@ -380,13 +381,13 @@ func Test_MultiPoolManager(t *testing.T) {
 		numMarsIPs := 31
 		for i := range numMarsIPs {
 			// set upstreamSync to true for last allocation, to ensure we only get one upsert event
-			ar, err := mgr.allocateNext(fmt.Sprintf("mars-pod-%d", i), "mars", IPv4, i == numMarsIPs-1)
+			ar, err := mgr.AllocateNext(fmt.Sprintf("mars-pod-%d", i), "mars", IPv4, i == numMarsIPs-1)
 			assert.NoError(t, err)
 			require.NotNil(t, ar)
 			assert.True(t, marsIPv4CIDR1.Contains(ar.IP))
 			allocatedMarsIPs = append(allocatedMarsIPs, ar.IP)
 		}
-		_, err = mgr.allocateNext("mars-pod-overflow", "mars", IPv4, false)
+		_, err = mgr.AllocateNext("mars-pod-overflow", "mars", IPv4, false)
 		assert.ErrorContains(t, err, "all CIDR ranges are exhausted")
 
 		ipv4Dump, _ := mgr.dump(IPv4)
@@ -448,7 +449,7 @@ func Test_MultiPoolManager(t *testing.T) {
 
 		// Should eventually be able to allocate from mars pool again
 		assert.EventuallyWithT(t, func(c *assert.CollectT) {
-			marsAllocation, err = mgr.allocateNext("mars-pod-overflow", "mars", IPv4, false)
+			marsAllocation, err = mgr.AllocateNext("mars-pod-overflow", "mars", IPv4, false)
 			require.NoError(c, err)
 			require.NotNil(c, marsAllocation)
 			assert.True(c, marsIPv4CIDR2.Contains(marsAllocation.IP))
@@ -456,7 +457,7 @@ func Test_MultiPoolManager(t *testing.T) {
 
 		// Deallocate all other IPs from mars pool. This should release the old CIDR
 		for i, addr := range allocatedMarsIPs {
-			err = mgr.releaseIP(addr, "mars", IPv4, i == numMarsIPs-1)
+			err = mgr.ReleaseIP(addr, "mars", IPv4, i == numMarsIPs-1)
 			assert.NoError(t, err)
 		}
 
@@ -569,7 +570,7 @@ func Test_MultiPoolManager_ReleaseAllCIDRs(t *testing.T) {
 		_, err := clientset.CiliumV2().CiliumNodes().Create(t.Context(), currentNode, metav1.CreateOptions{})
 		assert.NoError(t, err)
 
-		mgr := newMultiPoolManager(MultiPoolManagerParams{
+		mgr := NewMultiPoolManager(MultiPoolManagerParams{
 			Logger:               hivetest.Logger(t),
 			IPv4Enabled:          true,
 			IPv6Enabled:          true,
@@ -589,11 +590,11 @@ func Test_MultiPoolManager_ReleaseAllCIDRs(t *testing.T) {
 
 		// Allocate one IPv4 and one IPv6 IP before restore is finished. Once restore
 		// is finished, updateLocalNode may release unused CIDRs immediately.
-		ipv4Alloc, err := mgr.allocateNext("test-pod-v4", "default", IPv4, false)
+		ipv4Alloc, err := mgr.AllocateNext("test-pod-v4", "default", IPv4, false)
 		assert.NoError(t, err)
 		require.NotNil(t, ipv4Alloc)
 
-		ipv6Alloc, err := mgr.allocateNext("test-pod-v6", "default", IPv6, false)
+		ipv6Alloc, err := mgr.AllocateNext("test-pod-v6", "default", IPv6, false)
 		assert.NoError(t, err)
 		require.NotNil(t, ipv6Alloc)
 
@@ -604,14 +605,14 @@ func Test_MultiPoolManager_ReleaseAllCIDRs(t *testing.T) {
 		assert.Len(t, ipv6Dump[PoolDefault()], 1)
 
 		// Mark restore as finished so that releaseExcessCIDRs can actually release CIDRs
-		mgr.restoreFinished(IPv4)
-		mgr.restoreFinished(IPv6)
+		mgr.RestoreFinished(IPv4)
+		mgr.RestoreFinished(IPv6)
 
 		// Now release ALL IPs from the default pool (both IPv4 and IPv6)
-		err = mgr.releaseIP(ipv4Alloc.IP, "default", IPv4, true)
+		err = mgr.ReleaseIP(ipv4Alloc.IP, "default", IPv4, true)
 		assert.NoError(t, err)
 
-		err = mgr.releaseIP(ipv6Alloc.IP, "default", IPv6, true)
+		err = mgr.ReleaseIP(ipv6Alloc.IP, "default", IPv6, true)
 		assert.NoError(t, err)
 
 		// Wait to ensure all IPs are released in internal state
@@ -681,7 +682,7 @@ func Test_MultiPoolManager_ReleaseUnusedCIDR(t *testing.T) {
 		},
 	}
 
-	// Feed initial node to the fake API so that newMultiPoolManager returns immediately
+	// Feed initial node to the fake API so that NewMultiPoolManager returns immediately
 	go fakeK8sAPI.updateNode(initialNode)
 
 	var jg job.Group
@@ -696,7 +697,8 @@ func Test_MultiPoolManager_ReleaseUnusedCIDR(t *testing.T) {
 	preallocMap, err := ParseMultiPoolPreAllocMap(fakeConfig.IPAMMultiPoolPreAllocation)
 	assert.NoError(t, err)
 
-	mgr := newMultiPoolManager(MultiPoolManagerParams{
+	m := NewMultiPoolMetrics()
+	mgr := NewMultiPoolManager(MultiPoolManagerParams{
 		Logger:               logger,
 		IPv4Enabled:          fakeConfig.EnableIPv4,
 		IPv6Enabled:          fakeConfig.EnableIPv6,
@@ -706,6 +708,7 @@ func Test_MultiPoolManager_ReleaseUnusedCIDR(t *testing.T) {
 		CNClient:             fakeK8sAPI,
 		JobGroup:             jg,
 		PoolSpecAccessors:    MultiPoolAccessor,
+		Metrics:              m,
 	})
 
 	<-events // first upsert (initial node)
@@ -715,16 +718,16 @@ func Test_MultiPoolManager_ReleaseUnusedCIDR(t *testing.T) {
 
 	// Allocate one IPv4 and one IPv6 IP
 	ipInCIDR1 := netip.MustParseAddr("10.0.10.0")
-	_, err = mgr.allocateIP(ipInCIDR1, "pod-a", "default", IPv4, false)
+	_, err = mgr.AllocateIP(ipInCIDR1, "pod-a", "default", IPv4, false)
 	assert.NoError(t, err)
 
 	ipInCIDRv61 := netip.MustParseAddr("fd00:10::")
-	_, err = mgr.allocateIP(ipInCIDRv61, "pod-a", "default", IPv6, false)
+	_, err = mgr.AllocateIP(ipInCIDRv61, "pod-a", "default", IPv6, false)
 	assert.NoError(t, err)
 
 	// Mark restore finished so that releaseExcessCIDRsMultiPool() can run
-	mgr.restoreFinished(IPv4)
-	mgr.restoreFinished(IPv6)
+	mgr.RestoreFinished(IPv4)
+	mgr.RestoreFinished(IPv6)
 
 	// Manually invoke updateLocalNode
 	assert.NoError(t, mgr.updateLocalNode(context.TODO()))
@@ -744,6 +747,13 @@ func Test_MultiPoolManager_ReleaseUnusedCIDR(t *testing.T) {
 		alloc[0].CIDRs,
 		"unused CIDRs should have been released",
 	)
+
+	// Releasing the last IPs drops the pool and its metrics.
+	assert.NoError(t, mgr.ReleaseIP(ipInCIDR1, "default", IPv4, false))
+	assert.NoError(t, mgr.ReleaseIP(ipInCIDRv61, "default", IPv6, false))
+	assert.NoError(t, mgr.updateLocalNode(context.TODO()))
+	<-events
+	assert.Equal(t, 0, testutil.CollectAndCount(m.NeededIPs))
 }
 
 // Test_MultiPoolManager_ReleaseUnusedCIDR_PreAllocBuffer verifies that when preAlloc > 0
@@ -803,7 +813,7 @@ func Test_MultiPoolManager_ReleaseUnusedCIDR_PreAlloc(t *testing.T) {
 		},
 	}
 
-	// Feed initial node so that newMultiPoolManager returns immediately
+	// Feed initial node so that NewMultiPoolManager returns immediately
 	go fakeK8sAPI.updateNode(initialNode)
 
 	var jg job.Group
@@ -818,7 +828,7 @@ func Test_MultiPoolManager_ReleaseUnusedCIDR_PreAlloc(t *testing.T) {
 	preallocMap, err := ParseMultiPoolPreAllocMap(fakeConfig.IPAMMultiPoolPreAllocation)
 	assert.NoError(t, err)
 
-	mgr := newMultiPoolManager(MultiPoolManagerParams{
+	mgr := NewMultiPoolManager(MultiPoolManagerParams{
 		Logger:               logger,
 		IPv4Enabled:          fakeConfig.EnableIPv4,
 		IPv6Enabled:          fakeConfig.EnableIPv6,
@@ -838,17 +848,17 @@ func Test_MultiPoolManager_ReleaseUnusedCIDR_PreAlloc(t *testing.T) {
 	// Allocate 5 IPv4 and 5 IPv6 IPs
 	for i := range 5 {
 		ip4 := netip.MustParseAddr(fmt.Sprintf("10.0.100.%d", i))
-		_, err := mgr.allocateIP(ip4, fmt.Sprintf("pod4-%d", i), "default", IPv4, false)
+		_, err := mgr.AllocateIP(ip4, fmt.Sprintf("pod4-%d", i), "default", IPv4, false)
 		assert.NoError(t, err)
 
 		ip6 := netip.MustParseAddr(fmt.Sprintf("fd00:100::%d", i))
-		_, err = mgr.allocateIP(ip6, fmt.Sprintf("pod6-%d", i), "default", IPv6, false)
+		_, err = mgr.AllocateIP(ip6, fmt.Sprintf("pod6-%d", i), "default", IPv6, false)
 		assert.NoError(t, err)
 	}
 
 	// Mark restore finished so release code can run
-	mgr.restoreFinished(IPv4)
-	mgr.restoreFinished(IPv6)
+	mgr.RestoreFinished(IPv4)
+	mgr.RestoreFinished(IPv6)
 	assert.NoError(t, mgr.updateLocalNode(context.TODO()))
 
 	<-events // upsert generated by the update
@@ -1079,7 +1089,7 @@ func Test_MultiPoolManager_UpdateNodeRetries(t *testing.T) {
 		_, err := clientset.CiliumV2().CiliumNodes().Create(t.Context(), node.DeepCopy(), metav1.CreateOptions{})
 		assert.NoError(t, err)
 
-		mgr := newMultiPoolManager(MultiPoolManagerParams{
+		mgr := NewMultiPoolManager(MultiPoolManagerParams{
 			Logger:               hivetest.Logger(t),
 			IPv4Enabled:          true,
 			CiliumNodeUpdateRate: time.Millisecond,
@@ -1257,7 +1267,7 @@ func Test_pendingAllocationsPerPool(t *testing.T) {
 	pending.upsertPendingAllocation("other", "foo", IPv6)               // renewal
 
 	// Nothing should expire
-	pending.removeExpiredEntries()
+	assert.Empty(t, pending.removeExpiredEntries())
 	assert.Equal(t, 2, pending.pendingForPool("test", IPv4))
 	assert.Equal(t, 0, pending.pendingForPool("test", IPv6))
 	assert.Equal(t, 2, pending.pendingForPool("other", IPv4))
@@ -1266,7 +1276,7 @@ func Test_pendingAllocationsPerPool(t *testing.T) {
 	elapseTime(pendingAllocationTTL) // second time jump
 
 	// This should clean up everything before the first time jump
-	pending.removeExpiredEntries()
+	assert.Empty(t, pending.removeExpiredEntries())
 	assert.Equal(t, 1, pending.pendingForPool("test", IPv4))
 	assert.Equal(t, 0, pending.pendingForPool("test", IPv6))
 	assert.Equal(t, 1, pending.pendingForPool("other", IPv4))
@@ -1279,6 +1289,10 @@ func Test_pendingAllocationsPerPool(t *testing.T) {
 	pending.markAsAllocated("other", "foo", IPv6)
 	assert.Equal(t, 0, pending.pendingForPool("other", IPv4))
 	assert.Equal(t, 0, pending.pendingForPool("other", IPv6))
+
+	elapseTime(pendingAllocationTTL)
+	assert.Equal(t, []Pool{"test"}, pending.removeExpiredEntries())
+	assert.Equal(t, 0, pending.pendingForPool("test", IPv4))
 }
 
 type fakeK8sCiliumNodeAPIResource struct {
@@ -1439,7 +1453,7 @@ func TestAllocateNext_SkipMasquerade(t *testing.T) {
 
 func TestMultiPoolManagerUpdatesFirstLastIPSettingsBeforeAllocation(t *testing.T) {
 	logger := hivetest.Logger(t)
-	mgr := &multiPoolManager{
+	mgr := &MultiPoolManager{
 		logger:       logger,
 		ipv4Enabled:  true,
 		pools:        map[Pool]*poolPair{},
@@ -1456,11 +1470,11 @@ func TestMultiPoolManagerUpdatesFirstLastIPSettingsBeforeAllocation(t *testing.T
 	lastIP := netip.MustParseAddr("10.20.0.3")
 
 	mgr.upsertPoolLocked("default", []iputil.Prefix{prefix}, false, false)
-	_, err := mgr.allocateIP(lastIP, "pod-a", "default", IPv4, false)
+	_, err := mgr.AllocateIP(lastIP, "pod-a", "default", IPv4, false)
 	require.Error(t, err)
 
 	mgr.upsertPoolLocked("default", []iputil.Prefix{prefix}, false, true)
-	result, err := mgr.allocateIP(lastIP, "pod-a", "default", IPv4, false)
+	result, err := mgr.AllocateIP(lastIP, "pod-a", "default", IPv4, false)
 	require.NoError(t, err)
 	require.Equal(t, lastIP, result.IP)
 }
@@ -1469,7 +1483,7 @@ func TestMultiPoolManagerWaitForAllPools(t *testing.T) {
 	poolA, poolB := Pool("pool-a"), Pool("pool-b")
 
 	synctest.Test(t, func(t *testing.T) {
-		mgr := &multiPoolManager{
+		mgr := &MultiPoolManager{
 			logger:                 hivetest.Logger(t),
 			ipv4Enabled:            true,
 			preallocatedIPsPerPool: preAllocatePerPool{poolA: 8, poolB: 0},
@@ -1503,13 +1517,13 @@ func TestMultiPoolManagerWaitForAllPools(t *testing.T) {
 }
 
 func Test_multiPoolManager_staticIPStatus(t *testing.T) {
-	newNode := func(tags map[string]string, assigned string) *ciliumv2.CiliumNode {
+	newNode := func(tags map[string]string, assigned netip.Addr) *ciliumv2.CiliumNode {
 		return &ciliumv2.CiliumNode{
 			Spec: ciliumv2.NodeSpec{
 				IPAM: types.IPAMSpec{StaticIPTags: tags},
 			},
 			Status: ciliumv2.NodeStatus{
-				IPAM: types.IPAMStatus{AssignedStaticIP: assigned},
+				IPAM: types.IPAMStatus{AssignedStaticIP: iputil.AddrFrom(assigned)},
 			},
 		}
 	}
@@ -1518,37 +1532,37 @@ func Test_multiPoolManager_staticIPStatus(t *testing.T) {
 		name                  string
 		node                  *ciliumv2.CiliumNode
 		wantRequestedStaticIP bool
-		wantAssignedStaticIP  string
+		wantAssignedStaticIP  netip.Addr
 	}{
 		{
 			name:                  "nil node",
 			node:                  nil,
 			wantRequestedStaticIP: false,
-			wantAssignedStaticIP:  "",
+			wantAssignedStaticIP:  netip.Addr{},
 		},
 		{
 			name:                  "no static IP requested",
-			node:                  newNode(nil, ""),
+			node:                  newNode(nil, netip.Addr{}),
 			wantRequestedStaticIP: false,
-			wantAssignedStaticIP:  "",
+			wantAssignedStaticIP:  netip.Addr{},
 		},
 		{
 			name:                  "static IP requested but not yet assigned",
-			node:                  newNode(map[string]string{"env": "prod"}, ""),
+			node:                  newNode(map[string]string{"env": "prod"}, netip.Addr{}),
 			wantRequestedStaticIP: true,
-			wantAssignedStaticIP:  "",
+			wantAssignedStaticIP:  netip.Addr{},
 		},
 		{
 			name:                  "static IP requested and assigned",
-			node:                  newNode(map[string]string{"env": "prod"}, "1.2.3.4"),
+			node:                  newNode(map[string]string{"env": "prod"}, netip.MustParseAddr("1.2.3.4")),
 			wantRequestedStaticIP: true,
-			wantAssignedStaticIP:  "1.2.3.4",
+			wantAssignedStaticIP:  netip.MustParseAddr("1.2.3.4"),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mgr := &multiPoolManager{node: tt.node}
+			mgr := &MultiPoolManager{node: tt.node}
 			requested, assigned := mgr.staticIPStatus()
 			assert.Equal(t, tt.wantRequestedStaticIP, requested)
 			assert.Equal(t, tt.wantAssignedStaticIP, assigned)
@@ -1661,4 +1675,161 @@ func createSkipMasqTestManager(t *testing.T, db *statedb.DB, pools statedb.Table
 	require.NoError(t, err)
 
 	return v4Alloc
+}
+
+// Test_MultiPoolManager_Metrics checks updateLocalNode emits the per-pool,
+// per-family gauges. The harness and scenario are copied from
+// Test_MultiPoolManager_ReleaseUnusedCIDR_PreAlloc: with 5 IPs used per family out
+// of 10 /32 (and /128) CIDRs and preAlloc=1, excess CIDRs are released down to 6,
+// so used=5, available=6, needed=6.
+func Test_MultiPoolManager_Metrics(t *testing.T) {
+	logger := hivetest.Logger(t)
+
+	fakeConfig := testConfiguration
+	// disable debounce interval to trigger CiliumNode update at each test step
+	fakeConfig.IPAMCiliumNodeUpdateRate = 1 * time.Nanosecond
+	// preAlloc buffer of 1 for pool "default"
+	fakeConfig.IPAMMultiPoolPreAllocation = map[string]string{"default": "1"}
+
+	events := make(chan string, 2)
+	cnEvents := make(chan resource.Event[*ciliumv2.CiliumNode])
+	fakeK8sAPI := &fakeK8sCiliumNodeAPIResource{
+		c:    cnEvents,
+		node: &ciliumv2.CiliumNode{},
+		onUpsertEvent: func(err error) {
+			events <- "upsert"
+		},
+		onDeleteEvent: func(err error) {},
+	}
+
+	// Pool "default" owns 10 /32 IPv4 and 10 /128 IPv6 CIDRs.
+	cidrPodCIDRs := make([]iputil.Prefix, 0, 20)
+	for i := range 10 {
+		cidrPodCIDRs = append(cidrPodCIDRs,
+			iputil.PrefixFrom(netip.MustParsePrefix(fmt.Sprintf("10.0.100.%d/32", i))),
+			iputil.PrefixFrom(netip.MustParsePrefix(fmt.Sprintf("fd00:100::%d/128", i))),
+		)
+	}
+	initialNode := &ciliumv2.CiliumNode{
+		ObjectMeta: metav1.ObjectMeta{Name: nodeTypes.GetName()},
+		Spec: ciliumv2.NodeSpec{
+			IPAM: types.IPAMSpec{
+				Pools: types.IPAMPoolSpec{
+					Allocated: []types.IPAMPoolAllocation{{
+						Pool:  "default",
+						CIDRs: cidrPodCIDRs,
+					}},
+				},
+			},
+		},
+	}
+
+	// Feed initial node so that NewMultiPoolManager returns immediately
+	go fakeK8sAPI.updateNode(initialNode)
+
+	var jg job.Group
+	h := hive.New(
+		cell.Invoke(func(jg_ job.Group) { jg = jg_ }),
+	)
+
+	tlog := hivetest.Logger(t, hivetest.LogLevel(slog.LevelError))
+	require.NoError(t, h.Start(tlog, t.Context()))
+	t.Cleanup(func() { h.Stop(tlog, context.Background()) })
+
+	preallocMap, err := ParseMultiPoolPreAllocMap(fakeConfig.IPAMMultiPoolPreAllocation)
+	require.NoError(t, err)
+
+	m := NewMultiPoolMetrics()
+	mgr := NewMultiPoolManager(MultiPoolManagerParams{
+		Logger:               logger,
+		IPv4Enabled:          fakeConfig.EnableIPv4,
+		IPv6Enabled:          fakeConfig.EnableIPv6,
+		CiliumNodeUpdateRate: fakeConfig.IPAMCiliumNodeUpdateRate,
+		PreallocMap:          preallocMap,
+		Node:                 fakeK8sAPI,
+		CNClient:             fakeK8sAPI,
+		JobGroup:             jg,
+		PoolSpecAccessors:    MultiPoolAccessor,
+		Metrics:              m,
+	})
+
+	<-events // first upsert (initial node)
+	require.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.True(c, mgr.isNodeSynced())
+	}, time.Second, time.Millisecond)
+
+	// Allocate 5 IPv4 and 5 IPv6 IPs from pool "default".
+	for i := range 5 {
+		_, err := mgr.AllocateIP(netip.MustParseAddr(fmt.Sprintf("10.0.100.%d", i)), fmt.Sprintf("pod4-%d", i), "default", IPv4, false)
+		require.NoError(t, err)
+		_, err = mgr.AllocateIP(netip.MustParseAddr(fmt.Sprintf("fd00:100::%d", i)), fmt.Sprintf("pod6-%d", i), "default", IPv6, false)
+		require.NoError(t, err)
+	}
+
+	// Mark restore finished so release code can run
+	mgr.RestoreFinished(IPv4)
+	mgr.RestoreFinished(IPv6)
+
+	// Manually invoke updateLocalNode
+	assert.NoError(t, mgr.updateLocalNode(context.TODO()))
+
+	<-events // upsert generated by the update
+
+	for _, fam := range []string{"ipv4", "ipv6"} {
+		assert.Equal(t, float64(5), m.UsedIPs.WithLabelValues("default", fam).Get(), "used_ips family=%s", fam)
+		assert.Equal(t, float64(6), m.AvailableIPs.WithLabelValues("default", fam).Get(), "available_ips family=%s", fam)
+		assert.Equal(t, float64(6), m.NeededIPs.WithLabelValues("default", fam).Get(), "needed_ips family=%s", fam)
+		assert.Equal(t, float64(6), m.AllocatedBlocks.WithLabelValues("default", fam).Get(), "allocated_blocks family=%s", fam)
+	}
+
+	var now time.Time
+	elapseTime := func(duration time.Duration) {
+		mgr.poolsMutex.Lock()
+		defer mgr.poolsMutex.Unlock()
+		now = now.Add(duration)
+	}
+	mgr.poolsMutex.Lock()
+	mgr.pendingIPsPerPool.clock = func() time.Time { return now }
+	mgr.poolsMutex.Unlock()
+
+	// "other" has no CIDRs, so this stays pending.
+	_, err = mgr.AllocateNext("pod-other", "other", IPv4, false)
+	require.Error(t, err)
+	assert.NoError(t, mgr.updateLocalNode(context.TODO()))
+	<-events
+	assert.Equal(t, float64(1), m.NeededIPs.WithLabelValues("other", "ipv4").Get())
+	assert.Equal(t, float64(0), m.AvailableIPs.WithLabelValues("other", "ipv4").Get())
+
+	// Simulate expiry.
+	elapseTime(pendingAllocationTTL + time.Second)
+	assert.NoError(t, mgr.updateLocalNode(context.TODO()))
+	<-events
+
+	assert.Equal(t, 2, testutil.CollectAndCount(m.AvailableIPs))
+	assert.Equal(t, 2, testutil.CollectAndCount(m.UsedIPs))
+	assert.Equal(t, 2, testutil.CollectAndCount(m.NeededIPs))
+	assert.Equal(t, 2, testutil.CollectAndCount(m.AllocatedBlocks))
+}
+
+func Test_MultiPoolMetrics_deletePool(t *testing.T) {
+	m := NewMultiPoolMetrics()
+
+	m.setPoolFamily("default", IPv4, 10, 3, 4, 2)
+	m.setPoolFamily("default", IPv6, 20, 2, 4, 2)
+	m.setPoolFamily("other", IPv4, 5, 1, 1, 1)
+
+	// 3 series per gauge (default/ipv4, default/ipv6, other/ipv4).
+	require.Equal(t, 3, testutil.CollectAndCount(m.UsedIPs))
+	require.Equal(t, 3, testutil.CollectAndCount(m.AvailableIPs))
+	require.Equal(t, 3, testutil.CollectAndCount(m.NeededIPs))
+	require.Equal(t, 3, testutil.CollectAndCount(m.AllocatedBlocks))
+
+	m.deletePool("default")
+
+	// Only the "other" pool's ipv4 series remains for each gauge.
+	require.Equal(t, 1, testutil.CollectAndCount(m.UsedIPs))
+	require.Equal(t, 1, testutil.CollectAndCount(m.AvailableIPs))
+	require.Equal(t, 1, testutil.CollectAndCount(m.NeededIPs))
+	require.Equal(t, 1, testutil.CollectAndCount(m.AllocatedBlocks))
+	assert.Equal(t, float64(5), m.AvailableIPs.WithLabelValues("other", "ipv4").Get())
 }

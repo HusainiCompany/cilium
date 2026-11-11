@@ -7,11 +7,12 @@
 #include "scapy.h"
 
 /* Enable code paths under test */
-#define ENABLE_IPV4
-#define ENABLE_IPV6
+#define ENABLE_IPV4 1
+#define ENABLE_IPV6 1
 
 #include "lib/bpf_lxc.h"
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
 ASSIGN_CONFIG(bool, policy_deny_response_enabled, true)
 
 #include "lib/endpoint.h"

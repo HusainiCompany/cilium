@@ -65,20 +65,20 @@ env:
   test_name: scale-5
   cluster_name: ${{ github.run_id }}-${{ github.run_attempt }}
   # renovate: datasource=docker depName=google/cloud-sdk
-  gcloud_version: 585.0.0
+  gcloud_version: 592.0.0
 
 jobs:
   echo-inputs:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     name: Echo Workflow Dispatch Inputs
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Echo Workflow Dispatch Inputs
         run: |
           echo '${{ tojson(inputs) }}'
   commit-status-start:
     name: Commit Status Start
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Set initial commit status
         uses: cilium/actions/set-commit-status@687b48a0547e534dd7270d5069a5ab7967c0e907 # main
@@ -86,13 +86,17 @@ jobs:
           sha: ${{ inputs.SHA || github.sha }}
 
   install-and-scaletest:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     name: Install and Scale Test
     timeout-minutes: 150
     env:
       job_name: "Install and Scale Test"
     steps:
       - name: Set commit status to pending
+        # commit-status-start does not re-run, so this is only needed on a re-run. It's ok
+        # to continue on error since the check is reported at the end of the test.
+        if: ${{ github.run_attempt != '1' }}
+        continue-on-error: true
         uses: cilium/actions/set-commit-status@687b48a0547e534dd7270d5069a5ab7967c0e907 # main
         with:
           sha: ${{ inputs.SHA || github.sha }}
@@ -153,7 +157,7 @@ jobs:
 
       - name: Login to docker registry for image wait
         if: ${{ vars.DOCKER_AUTH_REQUIRED == 'true' }}
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ${{ vars.DOCKER_READ_HOST}}
           username: ${{ vars.DOCKER_READ_USERNAME}}
@@ -171,7 +175,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # renovate: datasource=golang-version depName=go
-          go-version: 1.27.1
+          go-version: 1.27.3
 
       - name: Install Kops
         uses: cilium/scale-tests-action/install-kops@529d919e01deb35642ba5c6ecdcbf2e2311cd3de # main
@@ -253,7 +257,7 @@ jobs:
           cluster_name: ${{ steps.vars.outputs.cluster_name }}
 
       - name: Install Cilium CLI
-        uses: cilium/cilium-cli@c5e42236c7d90bd50e7975ac587f77782666a0aa # v0.20.0
+        uses: cilium/cilium-cli@1ac7fa66909e3730ab3869c8ba7aa7d68f0197fd # v0.20.2
         with:
           skip-build: ${{ env.CILIUM_CLI_SKIP_BUILD }}
           image-repo: ${{ env.CILIUM_CLI_IMAGE_REPO }}

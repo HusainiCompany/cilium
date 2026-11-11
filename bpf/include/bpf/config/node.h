@@ -18,6 +18,8 @@
 /* Legacy node config rendered at agent runtime. */
 #include <node_config.h>
 
+NODE_CONFIG(bool, enable_ipv4, "Enable IPv4 support")
+
 NODE_CONFIG(__u32, cilium_net_ifindex, "Interface index of the cilium_net device")
 NODE_CONFIG(union macaddr, cilium_net_mac, "MAC address of the cilium_net device")
 NODE_CONFIG(__u32, cilium_host_ifindex, "Interface index of the cilium_host device")
@@ -43,8 +45,20 @@ NODE_CONFIG(bool, supports_fib_lookup_skip_neigh,
 NODE_CONFIG(bool, supports_fib_lookup_src,
 	    "Whether or not BPF_FIB_LOOKUP_SRC is supported.")
 
+NODE_CONFIG(bool, enable_nodeport, "Enable Nodeport support")
+/* todo(ekoops): get rid of the following by replacing it with CONFIG(enable_nodeport) once all BPF
+ *   BPF objects are pre-compiled.
+ */
+#ifdef SKIP_NODEPORT_PROGS
+# define NODEPORT_ENABLED 0
+#else
+# define NODEPORT_ENABLED CONFIG(enable_nodeport)
+#endif
+
 NODE_CONFIG(bool, enable_nodeport_source_lookup,
 	    "Enable dynamic source IP resolution for SNAT via linux's routing table.")
+
+NODE_CONFIG(bool, enable_nodeport_acceleration, "Enable NodePort acceleration via XDP")
 
 NODE_CONFIG(bool, enable_ipip_termination,
 	    "Terminate inbound IPIP/IP6IP6 in BPF on netdev ingress for local endpoint outer dst")
@@ -104,6 +118,8 @@ NODE_CONFIG(bool, enable_endpoint_routes, "Enable per endpoint routes")
 NODE_CONFIG(bool, enable_identity_mark, "Enable setting identity mark for local traffic")
 
 NODE_CONFIG(bool, enable_bpf_host_routing, "Enable BPF Host Routing")
+
+NODE_CONFIG(bool, enable_host_firewall, "Enable host firewall")
 
 NODE_CONFIG(bool, encryption_strict_ingress, "Enable strict encryption for ingress traffic")
 
@@ -180,4 +196,45 @@ NODE_CONFIG(__u32, encap4_ifindex,
 NODE_CONFIG(__u32, encap6_ifindex,
 	    "Interface index of the IPv6 IPIP encapsulation device")
 
+NODE_CONFIG(bool, enable_trace_notify, "Enable trace notifications")
 NODE_CONFIG(bool, enable_sctp, "Enable SCTP support")
+
+NODE_CONFIG(bool, enable_drop_notify, "Enable drop notifications")
+
+NODE_CONFIG(bool, enable_ip_masq_agent_ipv4, "Enable ip-masq-agent for IPv4 traffic")
+
+NODE_CONFIG(bool, enable_ip_masq_agent_ipv6, "Enable ip-masq-agent for IPv6 traffic")
+
+NODE_CONFIG(bool, enable_masquerade_ipv6, "Masquerade IPv6 traffic")
+
+NODE_CONFIG(bool, debug, "Enable debugging trace statements")
+
+NODE_CONFIG(bool, debug_tagged, "Enable debugging trace statements for tagged packets")
+
+struct dsr_config {
+	/* Enable DSR load balancing. */
+	bool enable;
+	/* Enable sending ICMP fragmentation-needed replies to the client. */
+	bool enable_icmp_errors;
+	/* Enable the common datapath for Hybrid-DSR+SNAT and Annotation-based+DSR+SNAT modes. */
+	bool enable_by_user;
+};
+
+NODE_CONFIG(struct dsr_config, dsr_cfg, "DSR-specific configuration")
+
+struct srv6_config {
+	/* Enable SRv6. */
+	bool enable;
+	/* Enable SRv6 Segment Routing Header encapsulation. */
+	bool enable_srh_encap;
+};
+
+NODE_CONFIG(struct srv6_config, srv6_cfg, "SRv6-specific configuration")
+
+NODE_CONFIG(bool, enable_ipsec, "Enable IPSec support")
+
+NODE_CONFIG(bool, enable_masquerade_ipv4, "Enable BPF masquerading for IPv4 traffic")
+
+NODE_CONFIG(bool, enable_wireguard, "Enable Wireguard support")
+
+NODE_CONFIG(bool, enable_l7_lb, "Enable L7 load-balancing support")

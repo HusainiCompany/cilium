@@ -9,7 +9,6 @@ import (
 	"net/netip"
 	"slices"
 
-	"go4.org/netipx"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/cilium/cilium/pkg/datapath/linux/netdevice"
@@ -135,8 +134,8 @@ func (config *PolicyConfig) regenerateGatewayConfig(manager *Manager) {
 				continue
 			}
 
-			addr, ok := netipx.FromStdIP(node.GetNodeIP(false))
-			if !ok {
+			addr := node.GetNodeIP(false)
+			if !addr.IsValid() {
 				continue
 			}
 			gwc.gatewayIP = addr
@@ -192,9 +191,26 @@ func deviceGetPrimaryAddresses(manager *Manager, iface string) (netip.Addr, neti
 	return primaryIP4, primaryIP6
 }
 
+// getDeviceWithAddress returns the device that owns the given address. This is
+// either the device that the address is assigned to, or the device that the
+// node address was derived from. The latter covers addresses that are owned by
+// the node through a local route without being assigned to any device, such as
+// the IPs of GCE forwarding rules that target the instance.
 func getDeviceWithAddress(manager *Manager, addr netip.Addr) *tables.Device {
-	for dev := range manager.deviceTable.All(manager.db.ReadTxn()) {
+	txn := manager.db.ReadTxn()
+
+	for dev := range manager.deviceTable.All(txn) {
 		if dev.HasIP(addr) {
+			return dev
+		}
+	}
+
+	for nodeAddr := range manager.nodeAddrTable.All(txn) {
+		if nodeAddr.Addr != addr || nodeAddr.DeviceName == tables.WildcardDeviceName {
+			continue
+		}
+
+		if dev, _, found := manager.deviceTable.Get(txn, tables.DeviceByName(nodeAddr.DeviceName)); found {
 			return dev
 		}
 	}

@@ -11,9 +11,10 @@ import (
 	"maps"
 	"net/http"
 	"net/netip"
+	"slices"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
-	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/network/armnetwork/v11"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/network/armnetwork/v12"
 	"k8s.io/apimachinery/pkg/util/sets"
 
 	"github.com/cilium/cilium/operator/pkg/ipam/nodemanager"
@@ -40,14 +41,17 @@ type AzureAPI interface {
 	ParseInterfacesIntoInstanceMap(networkInterfaces []*armnetwork.Interface, subnets ipamTypes.SubnetMap) *ipamTypes.InstanceMap
 	ListVMNetworkInterfaces(ctx context.Context, instanceID string) ([]*armnetwork.Interface, error)
 	ParseInterfacesIntoInstance(networkInterfaces []*armnetwork.Interface, subnets ipamTypes.SubnetMap) *ipamTypes.Instance
+	UnassignPrivateIpAddressesVM(ctx context.Context, interfaceName string, addresses []netip.Addr) error
+	UnassignPrivateIpAddressesVMSS(ctx context.Context, instanceID, vmssName, interfaceName string, addresses []netip.Addr) error
 }
 
 // InstancesManager maintains the list of instances. It must be kept up to date
 // by calling Resync() regularly.
 type InstancesManager struct {
 	logger *slog.Logger
-	// resyncLock ensures instance incremental resync do not run at the same time as a full API resync
-	resyncLock lock.RWMutex
+	// resyncLock keeps incremental resync and cache updates out of a full API resync
+	resyncLock    lock.RWMutex
+	instanceLocks lock.KeyedMutex[string]
 
 	// usePrimary mirrors the --azure-use-primary-address operator flag; when
 	// true, each NIC's primary IP is exposed to the allocatable pool.
@@ -72,7 +76,7 @@ func NewInstancesManager(logger *slog.Logger, api AzureAPI, usePrimary bool) *In
 
 // CreateNode is called on discovery of a new node
 func (m *InstancesManager) CreateNode(obj *v2.CiliumNode, _ *nodemanager.Node) nodemanager.NodeOperations {
-	return &Node{manager: m, instanceID: obj.InstanceID()}
+	return &Node{manager: m, instanceID: obj.InstanceID(), k8sObj: obj}
 }
 
 // HasInstance returns whether the instance is in instances
@@ -225,15 +229,51 @@ func (m *InstancesManager) resyncInstances(ctx context.Context) (time.Time, erro
 }
 
 func (m *InstancesManager) InstanceSync(ctx context.Context, instanceID string) (time.Time, error) {
-	// Instance incremental resync from different nodes should be executed in parallel,
-	// but must block the full API resync.
-	m.resyncLock.RLock()
-	defer m.resyncLock.RUnlock()
+	unlock := m.lockInstance(instanceID)
+	defer unlock()
 	return m.resyncInstance(ctx, instanceID)
+}
+
+func (m *InstancesManager) lockInstance(instanceID string) lock.UnlockFunc {
+	unlockInstance := m.instanceLocks.Lock(instanceID)
+	// The read lock allows incremental resyncs and cache updates for different
+	// instances to run in parallel, while excluding full API resyncs, which take
+	// the write lock.
+	m.resyncLock.RLock()
+
+	return func() {
+		m.resyncLock.RUnlock()
+		unlockInstance()
+	}
+}
+
+func (m *InstancesManager) removeIPsFromInterface(instanceID, interfaceID string, addresses []netip.Addr) {
+	unlock := m.lockInstance(instanceID)
+	defer unlock()
+
+	m.mutex.Lock()
+	defer m.mutex.Unlock()
+
+	iface, ok := m.instances.GetInterface(instanceID, interfaceID)
+	if !ok {
+		return
+	}
+	azureIface, ok := iface.(*types.AzureInterface)
+	if !ok {
+		return
+	}
+	updated := azureIface.DeepCopy()
+	updated.Addresses = slices.DeleteFunc(updated.Addresses, func(addr types.AzureAddress) bool {
+		return slices.Contains(addresses, addr.IP.Addr)
+	})
+	m.instances.Update(instanceID, updated)
 }
 
 // DeleteInstance delete instance from m.instances
 func (m *InstancesManager) DeleteInstance(instanceID string) {
+	unlock := m.lockInstance(instanceID)
+	defer unlock()
+
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 	m.instances.Delete(instanceID)

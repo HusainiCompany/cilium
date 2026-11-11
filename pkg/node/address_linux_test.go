@@ -7,6 +7,7 @@ package node
 
 import (
 	"fmt"
+	"math"
 	"net"
 	"testing"
 
@@ -15,6 +16,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/cilium/cilium/pkg/datapath/linux/safenetlink"
+	"github.com/cilium/cilium/pkg/netns"
 	"github.com/cilium/cilium/pkg/testutils"
 )
 
@@ -63,6 +65,78 @@ func TestPrivilegedFirstGlobalV4Addr(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, tc.want, got.String())
 		removeDevice(ifName)
+	}
+}
+
+func TestPrivilegedFirstGlobalV4AddrDeprecated(t *testing.T) {
+	setUpSuite(t)
+
+	const ifName = "dummy_iface"
+
+	testCases := []struct {
+		name          string
+		ips           []string
+		deprecatedIPs []string
+		preferredIP   string
+		want          string
+	}{
+		{
+			name:          "deprecated IP skipped when a usable one exists",
+			ips:           []string{"192.168.0.1"},
+			deprecatedIPs: []string{"21.0.0.1"},
+			want:          "192.168.0.1",
+		},
+		{
+			name:          "deprecated IP used when it is the only one",
+			deprecatedIPs: []string{"21.0.0.1"},
+			want:          "21.0.0.1",
+		},
+		{
+			name:          "deprecated preferred IP not restored when a usable one exists",
+			ips:           []string{"192.168.0.1"},
+			deprecatedIPs: []string{"21.0.0.1"},
+			preferredIP:   "21.0.0.1",
+			want:          "192.168.0.1",
+		},
+		{
+			name:          "deprecated preferred IP restored when it is the only one",
+			deprecatedIPs: []string{"21.0.0.1", "21.0.0.2"},
+			preferredIP:   "21.0.0.2",
+			want:          "21.0.0.2",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			// A fresh netns keeps the all-interfaces fallback off host addresses.
+			// pkg/testutils/netns would be an import cycle.
+			ns, err := netns.New()
+			require.NoError(t, err)
+			t.Cleanup(func() { ns.Close() })
+			var got net.IP
+			// Assert outside Do: it runs f on another goroutine.
+			require.NoError(t, ns.Do(func() error {
+				if err := setupDummyDevice(ifName, tc.ips...); err != nil {
+					return err
+				}
+				link, err := safenetlink.LinkByName(ifName)
+				if err != nil {
+					return err
+				}
+				for _, ipStr := range tc.deprecatedIPs {
+					// preferred_lft 0 sets IFA_F_DEPRECATED.
+					if err := netlink.AddrAdd(link, &netlink.Addr{
+						IPNet:    &net.IPNet{IP: net.ParseIP(ipStr), Mask: net.CIDRMask(32, 32)},
+						ValidLft: math.MaxUint32,
+					}); err != nil {
+						return err
+					}
+				}
+				got, err = FirstGlobalV4Addr(ifName, net.ParseIP(tc.preferredIP))
+				return err
+			}))
+			require.Equal(t, tc.want, got.String())
+		})
 	}
 }
 

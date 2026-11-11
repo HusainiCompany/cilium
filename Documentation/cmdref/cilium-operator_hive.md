@@ -11,12 +11,11 @@ cilium-operator hive [flags]
 ### Options
 
 ```
-      --alibaba-cloud-release-excess-ips                           Enable releasing excess free IP addresses from Alibaba Cloud ENI.
       --alibaba-cloud-vpc-id string                                Specific VPC ID for AlibabaCloud ENI. If not set use same VPC as operator
       --auto-create-cilium-pod-ip-pools stringToString             Automatically create CiliumPodIPPool resources on startup. Specify pools in the form of <pool>=ipv4-cidrs:<cidr>,[<cidr>...];ipv4-mask-size:<size>[;allow-first-ip:<bool>][;allow-last-ip:<bool>] (multiple pools can also be passed by repeating the CLI flag) (default [])
+      --auto-create-cilium-resource-ip-pools stringToString        Automatically create CiliumResourceIPPool resources on startup. Specify pools in the form of <pool>=ipv4-cidrs:<cidr>,[<cidr>...];ipv4-mask-size:<size>[;allow-first-ip:<bool>][;allow-last-ip:<bool>] (multiple pools can also be passed by repeating the CLI flag) (default [])
       --aws-enable-prefix-delegation                               Allows operator to allocate prefixes to ENIs instead of individual IP addresses
       --aws-max-results-per-call int32                             Maximum results per AWS API call for DescribeNetworkInterfaces, DescribeSecurityGroups and GetSecurityGroupsForVpc. Set to 0 to let AWS determine optimal page size (default). If set to 0 and AWS returns OperationNotPermitted errors, automatically switches to 1000 for all future requests
-      --aws-release-excess-ips                                     Enable releasing excess free IP addresses from AWS ENI.
       --azure-resource-group string                                Resource group containing the cluster nodes, defaults to cilium operator's own resource group retrieved via Azure Instance Metadata Service (IMDS)
       --azure-subscription-id string                               Subscription ID to access Azure API
       --azure-use-primary-address                                  Use Azure IP address from interface's primary IPConfigurations
@@ -67,7 +66,9 @@ cilium-operator hive [flags]
       --enable-k8s-api-discovery                                   Enable discovery of Kubernetes API groups and resources with the discovery API
       --enable-lb-ipam                                             Enable LB IPAM (default true)
       --enable-metrics                                             Enable Prometheus metrics
-      --enable-network-driver                                      enable network driver to assign interfaces via Dynamic Resource Allocation
+      --enable-network-driver                                      Enable the Cilium Network Driver to assign interfaces via Dynamic Resource Allocation
+      --enable-network-driver-ipv4                                 Enable IPv4 address assignment for Cilium Network Driver resources (default true)
+      --enable-network-driver-ipv6                                 Enable IPv6 address assignment for Cilium Network Driver resources
       --enable-node-ipam                                           Enable Node IPAM
       --enable-policy-secrets-sync                                 Enables fan-in TLS secrets sync from multiple namespaces to singular namespace (specified by policy-secrets-namespace flag)
       --enable-wireguard                                           Enable WireGuard
@@ -79,6 +80,7 @@ cilium-operator hive [flags]
       --excess-ip-release-delay int                                Number of seconds operator would wait before it releases an IP previously marked as excess (default 180)
       --gateway-api-hostnetwork-enabled                            Exposes Gateway listeners on the host network.
       --gateway-api-hostnetwork-nodelabelselector string           Label selector that matches the nodes where the gateway listeners should be exposed. It's a list of comma-separated key-value label pairs. e.g. 'kubernetes.io/os=linux,kubernetes.io/hostname=kind-worker'
+      --gateway-api-inference-extension-enabled                    Enables the use Gateway API Inference Extension
       --gateway-api-secrets-namespace string                       Namespace having tls secrets used by CEC for Gateway API (default "cilium-secrets")
       --gateway-api-service-externaltrafficpolicy string           Kubernetes LoadBalancer Service externalTrafficPolicy for all Gateway instances. (default "Cluster")
       --gateway-api-use-remote-address                             Use the immediate client's IP address as the origin client's IP address (default true)
@@ -108,6 +110,7 @@ cilium-operator hive [flags]
       --ingress-shared-lb-service-name string                      Name of shared LB service name for Ingress. (default "cilium-ingress")
       --ingress-use-remote-address                                 Use the immediate client's IP address as the origin client's IP address (default true)
       --ipam-default-ip-pool string                                Name of the default IP Pool when using multi-pool (default "default")
+      --ipam-release-excess-ips                                    Enable releasing excess free IP addresses from cloud provider interfaces
       --k8s-api-server-urls strings                                Kubernetes API server URLs
       --k8s-client-connection-keep-alive duration                  Configures the keep alive duration of K8s client connections. K8 client is disabled if the value is set to 0 (default 30s)
       --k8s-client-connection-timeout duration                     Configures the timeout of K8s client connections. K8s client is disabled if the value is set to 0 (default 30s)

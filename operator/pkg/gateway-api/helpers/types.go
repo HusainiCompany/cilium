@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	gateway_inf_ext "sigs.k8s.io/gateway-api-inference-extension/api/v1"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 	mcsapiv1beta1 "sigs.k8s.io/mcs-api/pkg/apis/v1beta1"
 )
@@ -20,6 +21,7 @@ const (
 	kindServiceImport = "ServiceImport"
 	kindSecret        = "Secret"
 	kindConfigMap     = "ConfigMap"
+	kindInferencePool = "InferencePool"
 
 	GatewayClassKind     string = "gatewayclasses"
 	GatewayKind          string = "gateways"
@@ -32,6 +34,7 @@ const (
 	UDPRouteKind         string = "udproutes"
 	ListenerSetKind      string = "listenersets"
 	ServiceImportKind    string = "serviceimports"
+	InferencePoolKind    string = "inferencepools"
 )
 
 func IsGateway(parent gatewayv1.ParentReference) bool {
@@ -97,8 +100,17 @@ func IsConfigMap(certRef gatewayv1.LocalObjectReference) bool {
 	return certRef.Kind == kindConfigMap && certRef.Group == corev1.GroupName
 }
 
+// IsObjectRefConfigMap checks if an ObjectReference refers to a ConfigMap.
+func IsObjectRefConfigMap(ref gatewayv1.ObjectReference) bool {
+	return ref.Kind == kindConfigMap && ref.Group == corev1.GroupName
+}
+
 func IsServiceTargetRef(tr gatewayv1.LocalPolicyTargetReferenceWithSectionName) bool {
 	return tr.Kind == kindService && tr.Group == corev1.GroupName
+}
+
+func IsInferencePool(infPool gatewayv1.BackendObjectReference) bool {
+	return infPool.Kind != nil && *infPool.Kind == kindInferencePool && infPool.Group != nil && *infPool.Group == gateway_inf_ext.GroupName
 }
 
 // getConcreteObject returns an instance of a concrete object type based on the
@@ -129,6 +141,8 @@ func GetConcreteObject(schemaType schema.GroupVersionKind) runtime.Object {
 		return &gatewayv1.ListenerSet{}
 	case ServiceImportKind:
 		return &mcsapiv1beta1.ServiceImport{}
+	case InferencePoolKind:
+		return &gateway_inf_ext.InferencePool{}
 	default:
 		// panic is okay here because this is a progammer error
 		panic(fmt.Sprintf("Tried to get a concrete type that is not implemented, %s", schemaType.Kind))
@@ -163,6 +177,9 @@ func GetConcreteListObject(schemaType schema.GroupVersionKind) runtime.Object {
 		return &gatewayv1.ListenerSetList{}
 	case ServiceImportKind:
 		return &mcsapiv1beta1.ServiceImportList{}
+	case InferencePoolKind:
+		return &gateway_inf_ext.InferencePoolList{}
+
 	default:
 		// panic is okay here because this is a progammer error
 		panic(fmt.Sprintf("Tried to get a concrete list type that is not implemented, %s", schemaType.Kind))

@@ -15,11 +15,11 @@ import (
 	"github.com/cilium/cilium/api/v1/models"
 	"github.com/cilium/cilium/pkg/bpf"
 	"github.com/cilium/cilium/pkg/idpool"
-	"github.com/cilium/cilium/pkg/ip"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/maps/nodemap"
 	"github.com/cilium/cilium/pkg/node"
+	"github.com/cilium/cilium/pkg/node/addressing"
 	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 )
 
@@ -67,7 +67,7 @@ func (n *linuxNodeHandler) getNodeIDForIP(nodeIP netip.Addr) (uint16, bool) {
 		logging.Fatal(n.log, "failed to retrieve local node")
 	}
 
-	if ip.AddrFromIP(ln.GetNodeIP(false)) == nodeIP || ip.AddrFromIP(ln.GetNodeIP(true)) == nodeIP {
+	if ln.GetNodeIP(false) == nodeIP || ln.GetNodeIP(true) == nodeIP {
 		return 0, true
 	}
 
@@ -152,7 +152,8 @@ func (n *linuxNodeHandler) allocateIDForNode(oldNode *nodeTypes.Node, node *node
 
 			return n.allocateIDForNode(oldNode, node)
 		}
-		if err := n.mapNodeID(ip, nodeID, node.EncryptionKey); err != nil {
+		isInternalIP := addr.AddrType() == addressing.NodeInternalIP
+		if err := n.mapNodeID(ip, nodeID, node.EncryptionKey, isInternalIP); err != nil {
 			n.log.Error("Failed to map node IP address to allocated ID",
 				logfields.Error, err,
 				logfields.NodeID, nodeID,
@@ -231,13 +232,13 @@ func (n *linuxNodeHandler) deallocateNodeIDLocked(nodeID uint16, nodeIPs map[str
 
 // mapNodeID adds a node ID <> IP mapping to the local in-memory indexes and the
 // corresponding BPF map. If the BPF update fails, the indexes remain unchanged.
-func (n *linuxNodeHandler) mapNodeID(ip string, id uint16, SPI uint8) error {
+func (n *linuxNodeHandler) mapNodeID(ip string, id uint16, SPI uint8, internalIP bool) error {
 	nodeIP, err := netip.ParseAddr(ip)
 	if err != nil {
 		return fmt.Errorf("invalid node IP %s: %w", ip, err)
 	}
 
-	if err := n.nodeMap.Update(nodeIP, id, SPI); err != nil {
+	if err := n.nodeMap.Update(nodeIP, id, SPI, internalIP); err != nil {
 		return err
 	}
 
@@ -284,7 +285,7 @@ func (n *linuxNodeHandler) diffAndUnmapNodeIPs(oldIPs, newIPs []nodeTypes.Addres
 nextOldIP:
 	for _, oldAddr := range oldIPs {
 		for _, newAddr := range newIPs {
-			if newAddr.IP.Equal(oldAddr.IP) {
+			if newAddr.IP == oldAddr.IP {
 				continue nextOldIP
 			}
 		}

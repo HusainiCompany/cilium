@@ -117,6 +117,10 @@ type Config struct {
 	// the masquerading IP address for the node.
 	DeriveMasqIPAddrFromDevice string
 
+	// SNATCollisionRetries is the maximum number of port allocation retries.
+	// This field is immutable at runtime.
+	SNATCollisionRetries uint16
+
 	// HostEndpointID is the endpoint ID assigned to the host endpoint.
 	// Immutable at runtime.
 	HostEndpointID uint64
@@ -238,7 +242,7 @@ type Config struct {
 	EncryptNode bool
 
 	// EnablePolicyAccounting enables maintaining packet and byte counters for every
-	// policy entry
+	// network endpoint.
 	EnablePolicyAccounting bool
 
 	// Enable per flow (conntrack) statistics
@@ -263,6 +267,9 @@ type Config struct {
 
 	// LBConfig holds the configuration options for load-balancing
 	LBConfig loadbalancer.Config
+
+	// EnableLocalRedirectPolicy enables redirect policies to redirect traffic within nodes.
+	EnableLocalRedirectPolicy bool
 
 	// Maglev configuration provides the maglev table sizes and seeds for
 	// the BPF programs.

@@ -5,9 +5,11 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"reflect"
 	"sync/atomic"
 
 	"github.com/cilium/hive/cell"
@@ -16,6 +18,7 @@ import (
 	"github.com/cilium/stream"
 	"github.com/spf13/pflag"
 
+	"github.com/cilium/cilium/daemon/cmd/cni"
 	cmtypes "github.com/cilium/cilium/pkg/clustermesh/types"
 	"github.com/cilium/cilium/pkg/datapath/config"
 	"github.com/cilium/cilium/pkg/datapath/connector"
@@ -36,6 +39,7 @@ import (
 	"github.com/cilium/cilium/pkg/endpointmanager"
 	"github.com/cilium/cilium/pkg/kpr"
 	"github.com/cilium/cilium/pkg/loadbalancer"
+	"github.com/cilium/cilium/pkg/loadbalancer/redirectpolicy"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/maglev"
 	"github.com/cilium/cilium/pkg/mtu"
@@ -56,6 +60,14 @@ const (
 
 	// reinitRetryDuration is the time to wait before retrying failed reinitialization.
 	reinitRetryDuration = 10 * time.Second
+
+	// datapathInitDeadline matches the default startupProbe budget, failureThreshold 300 at periodSeconds 2.
+	datapathInitDeadline = 10 * time.Minute
+
+	// datapathReadyTimeout bounds how long the agent readiness is held back waiting for the endpoint
+	// template. It matches the endpoint creation timeout of the CNI plugin, beyond which waiting
+	// longer would not help, and it must stay well below datapathInitDeadline.
+	datapathReadyTimeout = 90 * time.Second
 )
 
 var DefaultConfig = Config{
@@ -118,8 +130,10 @@ type orchestratorParams struct {
 	Lifecycle           cell.Lifecycle
 	EndpointManager     endpointmanager.EndpointManager
 	ConfigPromise       promise.Promise[*option.DaemonConfig]
+	DatapathReady       promise.Resolver[cni.DatapathReady]
 	XDPConfig           xdp.Config
 	LBConfig            loadbalancer.Config
+	LRPConfig           redirectpolicy.Config
 	KPRConfig           kpr.KPRConfig
 	SvcRouteConfig      svcrouteconfig.RoutesConfig
 	MaglevConfig        maglev.Config
@@ -163,8 +177,43 @@ func newOrchestrator(params orchestratorParams) *orchestrator {
 	})
 
 	params.JobGroup.Add(job.OneShot("reinitialize", o.reconciler, job.WithShutdown()))
+	params.JobGroup.Add(job.OneShot("precompile-endpoint-template", o.precompileEndpointTemplate))
 
 	return o
+}
+
+// precompileEndpointTemplate compiles the bpf_lxc template as soon as the datapath is initialized.
+// Once the compile is over, successfully or not, or datapathReadyTimeout has elapsed, the agent
+// may be ready and the CNI configuration may be written.
+// todo(ekoops): remove this once BPF objects get pre-compiled.
+func (o *orchestrator) precompileEndpointTemplate(ctx context.Context, health cell.Health) error {
+	// A canceled job means the agent is stopping, which must not write the CNI configuration.
+	resolve := func() {
+		if ctx.Err() == nil {
+			o.params.DatapathReady.Resolve(cni.DatapathReady{})
+		}
+	}
+
+	// The compile goes on if it takes longer: only the readiness stops waiting for it.
+	timer := time.AfterFunc(datapathReadyTimeout, func() {
+		o.params.Log.Info("Endpoint template not compiled in time, no longer holding back the readiness",
+			logfields.Timeout, datapathReadyTimeout,
+		)
+		resolve()
+	})
+	defer timer.Stop()
+
+	health.OK("Waiting for the datapath")
+	select {
+	case <-o.dpInitialized:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	health.OK("Pre-compiling the endpoint template")
+	err := o.params.Loader.PrecompileEndpointTemplate(ctx)
+	resolve()
+	return err
 }
 
 func (o *orchestrator) reconciler(ctx context.Context, health cell.Health) error {
@@ -184,7 +233,7 @@ func (o *orchestrator) reconciler(ctx context.Context, health cell.Health) error
 			func(n node.LocalNode) bool {
 				if agentConfig.EnableIPv4 {
 					loopback := n.Local.ServiceLoopbackIPv4.IsValid()
-					ipv4GW := n.GetCiliumInternalIPv4() != nil
+					ipv4GW := n.GetCiliumInternalIPv4().IsValid()
 					ipv4Range := n.IPv4AllocCIDR.IsValid()
 					if !ipv4GW || !ipv4Range || !loopback {
 						return false
@@ -192,7 +241,7 @@ func (o *orchestrator) reconciler(ctx context.Context, health cell.Health) error
 				}
 				if agentConfig.EnableIPv6 {
 					loopback := n.Local.ServiceLoopbackIPv6.IsValid()
-					ipv6GW := n.GetCiliumInternalIPv6() != nil
+					ipv6GW := n.GetCiliumInternalIPv6().IsValid()
 					if !ipv6GW || !loopback {
 						return false
 					}
@@ -217,13 +266,15 @@ func (o *orchestrator) reconciler(ctx context.Context, health cell.Health) error
 	}
 
 	var (
-		request   = reinitializeRequest{ctx: ctx}
-		retryChan <-chan time.Time
+		request          = reinitializeRequest{ctx: ctx}
+		retryChan        <-chan time.Time
+		firstInitFailure time.Time
+		giveUp           error
 	)
 	for {
 		var (
-			localNodeConfig      config.Config
-			localNodeConfigWatch <-chan struct{}
+			localNodeConfig        config.Config
+			localNodeConfigWatches []<-chan struct{}
 		)
 
 		// Re-run this on every reconciliation to update the tunnel MTU or
@@ -237,7 +288,7 @@ func (o *orchestrator) reconciler(ctx context.Context, health cell.Health) error
 			health.Degraded("Failed to ensure IPIP devices", err)
 			retryChan = time.After(reinitRetryDuration)
 		} else {
-			localNodeConfig, localNodeConfigWatch, err = newLocalNodeConfig(
+			localNodeConfig, localNodeConfigWatches, err = newLocalNodeConfig(
 				ctx,
 				option.Config,
 				localNode,
@@ -251,6 +302,7 @@ func (o *orchestrator) reconciler(ctx context.Context, health cell.Health) error
 				o.params.Config.DeriveMasqIPAddrFromDevice,
 				o.params.XDPConfig,
 				o.params.LBConfig,
+				o.params.LRPConfig.IsEnabled(),
 				o.params.KPRConfig,
 				o.params.SvcRouteConfig,
 				o.params.MaglevConfig,
@@ -269,6 +321,14 @@ func (o *orchestrator) reconciler(ctx context.Context, health cell.Health) error
 				if prevConfig == nil || !prevConfig.DeepEqual(&localNodeConfig) {
 					err = o.reinitialize(request.ctx, &localNodeConfig)
 					if err != nil {
+						// Only the first initialization gets a deadline; a later failure keeps the last good config.
+						if !o.initDone && !errors.Is(err, context.Canceled) {
+							if firstInitFailure.IsZero() {
+								firstInitFailure = time.Now()
+							} else if waited := time.Since(firstInitFailure); waited > datapathInitDeadline {
+								giveUp = fmt.Errorf("datapath not initialized after %s: %w", waited.Round(time.Second), err)
+							}
+						}
 						o.params.Log.Warn("Failed to initialize datapath, retrying later",
 							logfields.Error, err,
 							logfields.RetryDelay, reinitRetryDuration,
@@ -290,14 +350,41 @@ func (o *orchestrator) reconciler(ctx context.Context, health cell.Health) error
 		}
 		request = reinitializeRequest{ctx: ctx}
 
-		select {
-		case <-ctx.Done():
+		if giveUp != nil {
+			return giveUp
+		}
+
+		// Wait on all event sources with a single select. The statedb watch
+		// channels are variable in number, so the select is built with reflect;
+		// the index of each case is derived from the statement that adds it.
+		cases := make([]reflect.SelectCase, 0, 5+len(localNodeConfigWatches))
+		add := func(ch any) int {
+			cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(ch)})
+			return len(cases) - 1
+		}
+		ctxCase := add(ctx.Done())
+		retryCase := add(retryChan)
+		localNodesCase := add(localNodes)
+		triggerCase := add(o.trigger)
+		add(ipipWatch)
+		for _, watch := range localNodeConfigWatches {
+			add(watch)
+		}
+
+		chosen, value, ok := reflect.Select(cases)
+		switch chosen {
+		case ctxCase:
 			return ctx.Err()
-		case <-ipipWatch:
-		case <-localNodeConfigWatch:
-		case <-retryChan:
-		case localNode = <-localNodes:
-		case request = <-o.trigger:
+		case retryCase:
+			// Retry immediately after the rate limiter below.
+		case localNodesCase:
+			if !ok {
+				// localNodes is closed when ctx is cancelled.
+				return ctx.Err()
+			}
+			localNode = value.Interface().(node.LocalNode)
+		case triggerCase:
+			request = value.Interface().(reinitializeRequest)
 		}
 
 		// Limit the rate at which we reinitialize and to give the devs&addrs

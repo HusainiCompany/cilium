@@ -30,7 +30,6 @@ import (
 	"github.com/cilium/cilium/pkg/endpointstate"
 	"github.com/cilium/cilium/pkg/hive"
 	"github.com/cilium/cilium/pkg/maps/registry"
-	"github.com/cilium/cilium/pkg/node/manager"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/promise"
 )
@@ -56,6 +55,9 @@ func setupCompilationDirectories(tb testing.TB) {
 		// errors due to redefined macros and such. *sigh*
 		fmt.Sprintf("-I%s", bpfDir),
 		fmt.Sprintf("-I%s", filepath.Join(bpfDir, "include")),
+		// The agent defines it without kube-proxy replacement and BPF
+		// masquerading, which is the config of these tests.
+		"-DSKIP_NODEPORT_PROGS=1",
 	}
 
 	tb.Cleanup(func() {
@@ -85,7 +87,7 @@ func newTestLoader(tb testing.TB) *loader {
 		cell.Provide(func() (
 			sysctl.Sysctl,
 			linuxConfig.Writer,
-			*manager.NodeConfigNotifier,
+			*config.NodeConfigNotifier,
 			promise.Promise[endpointstate.Restorer],
 			prefilter.PreFilter,
 		) {
@@ -93,7 +95,7 @@ func newTestLoader(tb testing.TB) *loader {
 			resolver.Resolve(&FakeRestorer{})
 			return sysctl.NewDirectSysctl(afero.NewOsFs(), "/proc"),
 				configWriterForTest(tb),
-				&manager.NodeConfigNotifier{},
+				&config.NodeConfigNotifier{},
 				promise,
 				&FakePreFilter{}
 		}),

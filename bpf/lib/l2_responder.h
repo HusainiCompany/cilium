@@ -21,7 +21,7 @@ struct {
 	__type(key, struct l2_responder_v4_key);
 	__type(value, struct l2_responder_stats);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
-	__uint(max_entries, L2_RESPONDER_MAP4_SIZE);
+	__uint(max_entries, 4096);
 	__uint(map_flags, BPF_F_NO_PREALLOC);
 } cilium_l2_responder_v4 __section_maps_btf;
 
@@ -36,7 +36,7 @@ struct {
 	__type(key, struct l2_responder_v6_key);
 	__type(value, struct l2_responder_stats);
 	__uint(pinning, LIBBPF_PIN_BY_NAME);
-	__uint(max_entries, L2_RESPONDER_MAP6_SIZE);
+	__uint(max_entries, 4096);
 	__uint(map_flags, BPF_F_NO_PREALLOC);
 } cilium_l2_responder_v6 __section_maps_btf;
 
@@ -81,8 +81,7 @@ int handle_l2_announcement(struct __ctx_buff *ctx, struct ipv6hdr *ip6)
 			return CTX_ACT_OK;
 
 		ret = arp_respond(ctx, &mac, key.ip4.be32, &smac, sip);
-	} else {
-#ifdef ENABLE_IPV6
+	} else if (is_defined(ENABLE_IPV6)) {
 		struct l2_responder_v6_key key6;
 		union v6addr tip6;
 		int l3_off;
@@ -100,9 +99,8 @@ int handle_l2_announcement(struct __ctx_buff *ctx, struct ipv6hdr *ip6)
 		l3_off = (int)((__u8 *)ip6 - (__u8 *)ctx_data(ctx));
 
 		ret = icmp6_send_ndisc_adv(ctx, l3_off, &mac, false);
-#else
+	} else {
 		return CTX_ACT_OK;
-#endif
 	}
 
 	if (ret == CTX_ACT_REDIRECT)

@@ -92,11 +92,28 @@ func (c *DefaultController) onEndpointDelete(cep *cilium_api_v2.CiliumEndpoint) 
 	c.enqueueCESReconciliation([]CESKey{touchedCES})
 }
 
+// onSliceUpdate enqueues the CES unless it already matches its desired state.
+// Typically that is the informer echoing the reconciler's own write:
+// reconciling it would issue no request but would still consume a rate
+// limiter token.
 func (c *Controller) onSliceUpdate(ces *capi_v2a1.CiliumEndpointSlice) {
+	if c.doReconciler.cesUpToDate(ces) {
+		c.logger.Debug("Skipping up-to-date CES", logfields.CESName, ces.Name)
+		c.metrics.CiliumEndpointSliceEventsSkipped.WithLabelValues(LabelReasonUnchanged).Inc()
+		return
+	}
 	c.enqueueCESReconciliation([]CESKey{NewCESKey(ces.Name, ces.Namespace)})
 }
 
 func (c *Controller) onSliceDelete(ces *capi_v2a1.CiliumEndpointSlice) {
+	// Skip CESs with no CEPs mapped, typically those the reconciler deleted
+	// itself: reconciling them would issue no request either. A CES deleted
+	// while CEPs are still mapped to it is recreated.
+	if !c.doReconciler.cesHasEndpoints(CESName(ces.Name)) {
+		c.logger.Debug("Skipping deleted CES without endpoints", logfields.CESName, ces.Name)
+		c.metrics.CiliumEndpointSliceEventsSkipped.WithLabelValues(LabelReasonUnmapped).Inc()
+		return
+	}
 	c.enqueueCESReconciliation([]CESKey{NewCESKey(ces.Name, ces.Namespace)})
 }
 
@@ -161,6 +178,7 @@ func (c *DefaultController) Start(ctx cell.HookContext) error {
 	cepStore, _ := c.ciliumEndpoint.Store(ctx)
 	cesStore, _ := c.ciliumEndpointSlice.Store(ctx)
 	c.reconciler = newDefaultReconciler(c.clientset.CiliumV2alpha1(), c.manager, c.logger, cepStore, cesStore, c.metrics)
+	c.reconciler.emptyBeforeDeleteThreshold = c.emptyBeforeDeleteThreshold
 	c.doReconciler = c.reconciler
 
 	c.initializeQueue()
@@ -236,6 +254,7 @@ func (c *SlimController) Start(ctx cell.HookContext) error {
 	cnodeStore, _ := c.ciliumNodes.Store(ctx)
 	namespaceStore, _ := c.namespace.Store(ctx)
 	c.reconciler = newSlimReconciler(c.clientset.CiliumV2alpha1(), c.manager, c.logger, c.clusterInfo, cesStore, podStore, ciStore, cnodeStore, namespaceStore, c.metrics, c.ipsecEnabled, c.wgEnabled)
+	c.reconciler.emptyBeforeDeleteThreshold = c.emptyBeforeDeleteThreshold
 	c.doReconciler = c.reconciler
 
 	c.initializeQueue()

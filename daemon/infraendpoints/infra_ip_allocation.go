@@ -253,14 +253,19 @@ func (r *infraIPAllocator) allocateNextFromPool(ctx context.Context, family ipam
 	return result, nil
 }
 
-func (r *infraIPAllocator) waitForENI(ctx context.Context, macAddr mac.MAC) error {
-	bo := wait.Backoff{
-		Duration: 250 * time.Millisecond,
-		Factor:   2,
-		Jitter:   0.2,
-		Steps:    5,
-	}
+// waitForENIBackoff bounds how long waitForENI waits for an ENI. It covers the
+// ENI device configurator, which pauses for a second after an ENI shows up to
+// let udev rename it before bringing it up.
+var waitForENIBackoff = wait.Backoff{
+	Duration: 250 * time.Millisecond,
+	Factor:   2,
+	Jitter:   0.2,
+	Steps:    6,
+}
 
+// waitForENI waits for the ENI with the given MAC to show up. In ENI mode it
+// also waits for the link to be up.
+func (r *infraIPAllocator) waitForENI(ctx context.Context, macAddr mac.MAC) error {
 	findENIByMAC := func(ctx context.Context) (bool, error) {
 		links, err := safenetlink.LinkList()
 		if err != nil {
@@ -273,18 +278,18 @@ func (r *infraIPAllocator) waitForENI(ctx context.Context, macAddr mac.MAC) erro
 				continue
 			}
 			if bytes.Equal(l.Attrs().HardwareAddr, macAddr.HardwareAddr()) {
-				return true, nil
+				return !(r.daemonConfig.IPAM == ipamOption.IPAMENI && l.Attrs().RawFlags&unix.IFF_UP == 0), nil
 			}
 		}
 		return false, nil
 	}
 
-	return wait.ExponentialBackoffWithContext(ctx, bo, findENIByMAC)
+	return wait.ExponentialBackoffWithContext(ctx, waitForENIBackoff, findENIByMAC)
 }
 
 func (r *infraIPAllocator) reallocateRouterIPs(ctx context.Context, family node.AddressingFamily, fromK8s, fromFS net.IP) (routerIP net.IP, err error) {
 	// Avoid allocating external IP
-	r.ipAllocator.ExcludeIP(iputil.AddrFromIP(family.PrimaryExternal()), "node-ip", ipam.PoolDefault())
+	r.ipAllocator.ExcludeIP(family.PrimaryExternal(), "node-ip", ipam.PoolDefault())
 
 	// (Re-)allocate the router IP. If not possible, allocate a fresh IP.
 	// In that case, the old router IP needs to be removed from cilium_host
@@ -293,16 +298,14 @@ func (r *infraIPAllocator) reallocateRouterIPs(ctx context.Context, family node.
 	// have been regenerated.
 	result := r.reallocateOldRouterIPs(fromK8s, fromFS)
 	if result == nil {
-		primaryAddr, _ := netip.AddrFromSlice(family.PrimaryExternal())
-		family := ipam.DeriveFamily(primaryAddr.Unmap())
-		result, err = r.allocateNextFromPool(ctx, family, "router")
+		ipfamily := ipam.DeriveFamily(family.PrimaryExternal())
+		result, err = r.allocateNextFromPool(ctx, ipfamily, "router")
 		if err != nil {
-			return nil, fmt.Errorf("unable to allocate router IP for family %s: %w", family, err)
+			return nil, fmt.Errorf("unable to allocate router IP for family %s: %w", ipfamily, err)
 		}
 	}
 
-	primaryAddr, _ := netip.AddrFromSlice(family.PrimaryExternal())
-	ipfamily := ipam.DeriveFamily(primaryAddr.Unmap())
+	ipfamily := ipam.DeriveFamily(family.PrimaryExternal())
 	masq := (ipfamily == ipam.IPv4 && r.daemonConfig.EnableIPv4Masquerade) ||
 		(ipfamily == ipam.IPv6 && r.daemonConfig.EnableIPv6Masquerade)
 
@@ -588,8 +591,8 @@ func (r *infraIPAllocator) AllocateIPs(ctx context.Context) error {
 
 	// Fetch the router (`cilium_host`) IPs in case they were set a priori from
 	// the Kubernetes or CiliumNode resource in the K8s subsystem.
-	restoredRouterIPIPv4FromK8s := localNode.GetCiliumInternalIPv4()
-	restoredRouterIPv6FromK8s := localNode.GetCiliumInternalIPv6()
+	restoredRouterIPIPv4FromK8s := net.IP(localNode.GetCiliumInternalIPv4().AsSlice())
+	restoredRouterIPv6FromK8s := net.IP(localNode.GetCiliumInternalIPv6().AsSlice())
 	// Fetch the router IPs from the filesystem in case they were set a priori
 	restoredRouterIPIPv4FromFS, restoredRouterIPIPv6FromFS := r.extractCiliumHostIPFromFS()
 
@@ -682,7 +685,7 @@ func (r *infraIPAllocator) allocateRouterIPs(ctx context.Context, restoredRouter
 			return err
 		}
 		if routerIP != nil {
-			r.localNodeStore.Update(func(n *node.LocalNode) { n.SetCiliumInternalIP(routerIP) })
+			r.localNodeStore.Update(func(n *node.LocalNode) { n.SetCiliumInternalIP(iputil.AddrFromIP(routerIP)) })
 			r.logger.Debug("Allocated IPv4 Router address", logfields.IPAddr, routerIP)
 			v4 = routerIP
 		}
@@ -694,7 +697,7 @@ func (r *infraIPAllocator) allocateRouterIPs(ctx context.Context, restoredRouter
 			return err
 		}
 		if routerIP != nil {
-			r.localNodeStore.Update(func(n *node.LocalNode) { n.SetCiliumInternalIP(routerIP) })
+			r.localNodeStore.Update(func(n *node.LocalNode) { n.SetCiliumInternalIP(iputil.AddrFromIP(routerIP)) })
 			r.logger.Debug("Allocated IPv6 Router address", logfields.IPAddr, routerIP)
 			v6 = routerIP
 		}

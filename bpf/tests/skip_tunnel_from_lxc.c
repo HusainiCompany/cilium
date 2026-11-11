@@ -22,9 +22,9 @@
  * Datapath configuration settings to setup tunneling with VXLan
  */
 #define ENCAP_IFINDEX 1  /* Set dummy ifindex for tunnel device */
-#define ENABLE_IPV4
-#define ENABLE_IPV6
-#define TUNNEL_MODE
+#define ENABLE_IPV4 1
+#define ENABLE_IPV6 1
+#define TUNNEL_MODE 1
 
 /*
  * Include entrypoint into lxc egress stack
@@ -39,6 +39,7 @@
 #include "lib/policy.h"
 #include "lib/subnet.h"
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
 ASSIGN_CONFIG(bool, hybrid_routing_enabled, true)
 
 static __always_inline int

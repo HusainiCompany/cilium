@@ -22,12 +22,12 @@ permissions:
 
 env:
   # renovate: datasource=github-releases depName=eksctl-io/eksctl
-  eksctl_version: v0.230.0
+  eksctl_version: v0.231.0
 
 jobs:
   generate-cleanup-matrix:
     name: Generate Cleanup Matrix
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     if: ${{ github.event_name == 'schedule' }}
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
@@ -70,7 +70,7 @@ jobs:
       # To be able to request the JWT from GitHub's OIDC provider
       id-token: write
     name: Cleanup clusters older than 6 hours
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: generate-cleanup-matrix
     if: ${{ needs.generate-cleanup-matrix.outputs.empty == 'false' }}
     timeout-minutes: 45
@@ -84,7 +84,7 @@ jobs:
           persist-credentials: false
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_PR_ASSUME_ROLE }}
           aws-region: ${{ matrix.region }}
@@ -177,7 +177,7 @@ jobs:
 
                 # Remove kubeconfig from S3 pool
                 echo "Removing kubeconfigs for cluster ${cluster} from S3 bucket ${S3_BUCKET}"
-                aws s3 rm "s3://${S3_BUCKET}/kubeconfig-pool/" --recursive --exclude "*" --include "${cluster}-*" --region ${REGION} || true
+                aws s3 rm "s3://${S3_BUCKET}/kubeconfig-pool/" --recursive --exclude "*" --include "*/${cluster}-*.yaml" --region ${REGION} || true
               fi
 
               # Trigger the eks-cluster-delete workflow to delete the cluster
@@ -194,7 +194,7 @@ jobs:
 
   cleanup-unassociated-eips:
     name: Cleanup unassociated EIPs
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: [generate-cleanup-matrix, cleanup-old-clusters]
     if: ${{ always() && needs.generate-cleanup-matrix.outputs.empty == 'false' }}
     timeout-minutes: 20
@@ -203,7 +203,7 @@ jobs:
       fail-fast: false
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_PR_ASSUME_ROLE }}
           aws-region: ${{ matrix.region }}
@@ -231,19 +231,31 @@ jobs:
             if [ -n "${eip_info}" ]; then
               ALLOCATION_ID=$(echo "${eip_info}" | jq -r '.[0]')
 
-              aws ec2 release-address \
+              # eksctl tags the address "<stack>/NATIP".
+              STACK=$(echo "${eip_info}" | jq -r '.[1] | split("/")[0]')
+              STATUS=$(aws cloudformation describe-stacks \
                 --region "${REGION}" \
-                --allocation-id "${ALLOCATION_ID}" || {
-                echo "Failed to release EIP ${ALLOCATION_ID}, continuing..."
-              }
+                --stack-name "${STACK}" \
+                --query 'Stacks[0].StackStatus' \
+                --output text 2>/dev/null || echo "GONE")
+              if [[ "${STATUS}" == *_IN_PROGRESS ]]; then
+                echo "Skipping EIP ${ALLOCATION_ID}: stack ${STACK} is ${STATUS}"
+                continue
+              fi
 
-              echo "Successfully released EIP: ${ALLOCATION_ID}"
+              if aws ec2 release-address \
+                --region "${REGION}" \
+                --allocation-id "${ALLOCATION_ID}"; then
+                echo "Successfully released EIP: ${ALLOCATION_ID}"
+              else
+                echo "Failed to release EIP ${ALLOCATION_ID}, continuing..."
+              fi
             fi
           done
 
   generate-create-matrix:
     name: Generate Create Matrix
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
       empty: ${{ steps.set-matrix.outputs.empty }}
@@ -317,7 +329,7 @@ jobs:
 
   ensure-s3-bucket:
     name: Ensure S3 bucket exists
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: generate-create-matrix
     if: ${{ always() && needs.generate-create-matrix.outputs.empty == 'false' }}
     timeout-minutes: 10
@@ -326,7 +338,7 @@ jobs:
       fail-fast: false
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_PR_ASSUME_ROLE }}
           aws-region: ${{ matrix.region }}
@@ -384,7 +396,7 @@ jobs:
       # To be able to request the JWT from GitHub's OIDC provider
       id-token: write
     name: Create EKS clusters for pool
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: [cleanup-old-clusters, cleanup-unassociated-eips, generate-create-matrix, ensure-s3-bucket]
     if: ${{ always() && needs.generate-create-matrix.outputs.empty == 'false' }}
     timeout-minutes: 30
@@ -404,7 +416,7 @@ jobs:
           rm "eksctl_$(uname -s)_amd64.tar.gz"
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_PR_ASSUME_ROLE }}
           aws-region: ${{ matrix.region }}
@@ -641,7 +653,7 @@ jobs:
 
   report-status:
     name: Report pool status
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: [generate-cleanup-matrix, cleanup-old-clusters, cleanup-unassociated-eips, create-clusters]
     if: ${{ always() && needs.generate-cleanup-matrix.outputs.empty == 'false' }}
     timeout-minutes: 10
@@ -649,7 +661,7 @@ jobs:
       matrix: ${{ fromJson(needs.generate-cleanup-matrix.outputs.matrix) }}
     steps:
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6.2.4
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           role-to-assume: ${{ secrets.AWS_PR_ASSUME_ROLE }}
           aws-region: ${{ matrix.region }}

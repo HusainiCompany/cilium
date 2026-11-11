@@ -11,6 +11,7 @@ import (
 
 	"github.com/cilium/cilium/pkg/act"
 	"github.com/cilium/cilium/pkg/datapath/agentliveness"
+	"github.com/cilium/cilium/pkg/datapath/config"
 	"github.com/cilium/cilium/pkg/datapath/connector"
 	"github.com/cilium/cilium/pkg/datapath/gneigh"
 	"github.com/cilium/cilium/pkg/datapath/ipcache"
@@ -18,6 +19,7 @@ import (
 	"github.com/cilium/cilium/pkg/datapath/l2responder"
 	"github.com/cilium/cilium/pkg/datapath/link"
 	linuxdatapath "github.com/cilium/cilium/pkg/datapath/linux"
+	"github.com/cilium/cilium/pkg/datapath/linux/adnr"
 	"github.com/cilium/cilium/pkg/datapath/linux/bandwidth"
 	"github.com/cilium/cilium/pkg/datapath/linux/bigtcp"
 	dpcfg "github.com/cilium/cilium/pkg/datapath/linux/config"
@@ -52,6 +54,8 @@ import (
 var Cell = cell.Module(
 	"datapath",
 	"Datapath",
+
+	config.NodeConfigNotifierCell,
 
 	// Provides all BPF Map which are already provided by via hive cell.
 	maps.Cell,
@@ -145,6 +149,7 @@ var Cell = cell.Module(
 	// Provides the Linux node reconciler, its policy hooks, and node ID API.
 	cell.Provide(linuxdatapath.NewNodePolicy, linuxdatapath.NewNodeHandler),
 	cell.Invoke(linuxdatapath.RegisterNodeReconciler),
+	adnr.Cell,
 	cell.Provide(node.NewNodeIDApiHandler),
 
 	// Provides Active Connection Tracking metrics based on counts of

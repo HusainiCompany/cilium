@@ -4,6 +4,25 @@ to modify or extend the default chart behaviors.
 */}}
 
 {{/*
+Allow packagers to add Hubble Relay configuration entries.
+*/}}
+{{- define "hubble-relay.config.extra" -}}
+{{- end -}}
+
+{{/*
+Allow packagers to set the Hubble Relay gRPC container port name.
+*/}}
+{{- define "hubble-relay.port.name" -}}
+grpc
+{{- end -}}
+
+{{/*
+Allow packagers to add Hubble Relay volume mounts.
+*/}}
+{{- define "hubble-relay.volumeMounts.extra" -}}
+{{- end -}}
+
+{{/*
 Allow packagers to add extra volumes to cilium-agent.
 */}}
 {{- define "cilium-agent.volumes.extra" }}
@@ -180,7 +199,7 @@ The template needs to allow overriding ports spec not just adding.
 {{- define "envoy.ports" -}}
         {{- if .Values.envoy.prometheus.enabled }}
         ports:
-        - name: envoy-metrics
+        - name: {{ .Values.envoy.prometheus.portName | quote }}
           containerPort: {{ .Values.envoy.prometheus.port }}
           hostPort: {{ .Values.envoy.prometheus.port }}
           protocol: TCP

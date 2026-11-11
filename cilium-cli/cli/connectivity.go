@@ -134,6 +134,7 @@ func newCmdConnectivityTest(hooks api.Hooks) *cobra.Command {
 	}
 
 	cmd.Flags().BoolVar(&params.SingleNode, "single-node", false, "Limit to tests able to run on a single node")
+	cmd.Flags().BoolVar(&params.SkipHostNetNSDaemonSet, "skip-host-netns-daemonset", false, "Skip host-netns DaemonSet deployment on Cilium nodes and all tests relying on it")
 	cmd.Flags().BoolVar(&params.PrintFlows, "print-flows", false, "Print flow logs for each test")
 	cmd.Flags().DurationVar(&params.PostTestSleepDuration, "post-test-sleep", 0, "Wait time after each test before next test starts")
 	cmd.Flags().BoolVar(&params.ForceDeploy, "force-deploy", false, "Force re-deploying test artifacts")
@@ -247,6 +248,9 @@ func newCmdConnectivityPerf(hooks api.Hooks) *cobra.Command {
 		Short: "Test network performance",
 		Long:  ``,
 		PreRunE: func(_ *cobra.Command, _ []string) error {
+			if duration := params.PerfParameters.Duration; duration%time.Second != 0 {
+				return fmt.Errorf("invalid --duration %s: fractional seconds are not supported", duration)
+			}
 			// This is a bit of hack that allows us to override default values
 			// of these parameters that are not visible in perf subcommand options
 			// as we can't have different defaults specified in test and perf subcommands

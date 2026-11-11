@@ -6,9 +6,7 @@
 #include "pktgen.h"
 
 /* Enable code paths under test */
-#define ENABLE_IPV4
-#define ENABLE_NODEPORT
-#define ENABLE_NODEPORT_ACCELERATION
+#define ENABLE_IPV4 1
 
 #define CLIENT_IP		v4_ext_one
 #define CLIENT_PORT		__bpf_htons(111)
@@ -24,7 +22,10 @@
 
 #include "lib/bpf_xdp.h"
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
 ASSIGN_CONFIG(bool, enable_endpoint_routes, true)
+ASSIGN_CONFIG(bool, enable_nodeport_acceleration, true)
+ASSIGN_CONFIG(bool, enable_nodeport, true)
 
 #include "lib/endpoint.h"
 #include "lib/ipcache.h"

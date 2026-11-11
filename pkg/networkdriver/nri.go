@@ -7,21 +7,32 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"path"
 
 	"github.com/cilium/hive/cell"
 	"github.com/cilium/hive/job"
 	"github.com/containerd/nri/pkg/api"
 	"github.com/containerd/nri/pkg/stub"
+	"github.com/spf13/afero"
 	"github.com/vishvananda/netlink"
+	"go4.org/netipx"
 	kube_types "k8s.io/apimachinery/pkg/types"
 
 	"github.com/cilium/cilium/pkg/datapath/linux/safenetlink"
+	"github.com/cilium/cilium/pkg/datapath/linux/sysctl"
 	"github.com/cilium/cilium/pkg/defaults"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/netns"
 	"github.com/cilium/cilium/pkg/networkdriver/types"
 	"github.com/cilium/cilium/pkg/time"
+)
+
+type ipamAction string
+
+const (
+	addrAdd ipamAction = "add"
+	addrDel ipamAction = "del"
 )
 
 var (
@@ -52,7 +63,8 @@ func (driver *Driver) startNRI(ctx context.Context) error {
 
 	driver.nriPlugin = nriStub
 
-	driver.jg.Add(job.OneShot("networkdriver-nri-plugin-run", func(ctx context.Context, health cell.Health) error {
+	driver.jg.Add(job.OneShot("network-driver-nri-plugin-run", func(ctx context.Context, health cell.Health) error {
+		driver.logger.InfoContext(ctx, "starting NRI plugin")
 		for {
 			if err := driver.nriPlugin.Run(ctx); err != nil {
 				driver.logger.ErrorContext(
@@ -63,7 +75,7 @@ func (driver *Driver) startNRI(ctx context.Context) error {
 
 				health.Degraded("Network Driver NRI plugin failed", err)
 			} else {
-				health.OK("Network Driver NRI plugin registraction successful")
+				health.OK("Network Driver NRI plugin registration successful")
 			}
 			select {
 			case <-ctx.Done():
@@ -80,25 +92,37 @@ func (driver *Driver) startNRI(ctx context.Context) error {
 // Synchronize is invoked by the runtime when the NRI plugin (re)connects — notably right
 // after an agent restart — with every running pod. The sandbox tasks are alive here, so
 // the netns is populated; we capture it so a later StopPodSandbox can recover the netns
-// on containerd < 2.1 even across an agent restart. This mirrors how the statedb
-// device table is rebuilt from ResourceClaims on restart: node-local runtime state
-// reconstructed from a durable source rather than persisted to disk. We request no
-// container updates.
+// on containerd < 2.1 even across an agent restart. This mirrors how allocation state is
+// rebuilt from ResourceClaims on restart: node-local runtime state reconstructed from a
+// durable source rather than persisted to disk. We request no container updates.
+//
+// A sandbox that started while the agent was down never reached RunPodSandbox, so
+// RX queues are leased here as well. Leasing an already leased queue is a no-op.
 func (driver *Driver) Synchronize(ctx context.Context, pods []*api.PodSandbox, _ []*api.Container) ([]*api.ContainerUpdate, error) {
-	err := driver.withLock(func() error {
+	driver.withLockNoErr(func() {
 		n := 0
 		for _, pod := range pods {
-			if driver.rememberNetworkNamespace(pod) != "" {
-				n++
+			networkNamespace := driver.rememberNetworkNamespace(pod)
+			if networkNamespace == "" {
+				continue
+			}
+			n++
+
+			podAllocations := driver.allocationsForPod(kube_types.UID(pod.Uid))
+			nsPath := path.Join(podNetNSPath, path.Base(networkNamespace))
+			if err := leaseRXQueues(nsPath, podAllocations); err != nil {
+				driver.logger.WarnContext(ctx, "NRI Synchronize: failed to lease RX queue",
+					logfields.K8sNamespace, pod.GetNamespace(),
+					logfields.K8sPodName, pod.GetName(),
+					logfields.Error, err,
+				)
 			}
 		}
 		driver.logger.DebugContext(ctx, "NRI Synchronize: cached pod network namespaces",
 			logfields.Count, n,
 		)
-		return nil
 	})
-
-	return nil, err
+	return nil, nil
 }
 
 // RunPodSandbox is called by the container runtime when a pod sandbox is started.
@@ -134,6 +158,15 @@ func (driver *Driver) RunPodSandbox(ctx context.Context, podSandbox *api.PodSand
 
 		nsPath := path.Join(podNetNSPath, path.Base(networkNamespace))
 
+		// Lease RX queues before any container starts, so a workload can
+		// register the leased queue as soon as it runs.
+		if err := leaseRXQueues(nsPath, podAllocations); err != nil {
+			return err
+		}
+		if !hasNRIManagedInterface(podAllocations) {
+			return nil
+		}
+
 		podNs, err := netns.OpenPinned(nsPath)
 		if err != nil {
 			return fmt.Errorf("failed to open pinned netns at %s: %w", nsPath, err)
@@ -152,26 +185,21 @@ func (driver *Driver) RunPodSandbox(ctx context.Context, podSandbox *api.PodSand
 			return fmt.Errorf("pod interface allocations is invalid: %w", err)
 		}
 
-		for _, a := range podAllocations {
+		for i := range podAllocations {
+			a := &podAllocations[i]
+			if a.Manager == types.DeviceManagerTypeRXQueue {
+				// The RX queue was leased to the existing interface created by CNI.
+				continue
+			}
 			l, err := safenetlink.LinkByName(a.Device.KernelIfName())
 			if err != nil {
-				// The kernel link can be absent here when the node
-				// rebooted: the reboot reaped the pod netns (and with
-				// it any on-demand device such as a dummy
-				// device), and the restore path rebuilt the
-				// in-memory allocation WITHOUT re-creating the kernel
-				// device — Device.Setup runs only on the prepare path,
-				// which is short-circuited for a restored allocation.
+				// A node reboot removes the pod netns and any on-demand link moved
+				// into it, while restore reconstructs the allocation from the
+				// ResourceClaim without recreating the link. Re-create the missing
+				// device when the replacement sandbox starts.
 				//
-				// Only the (re)creation of the sandbox drives
-				// RunPodSandbox, so this is the one moment that
-				// unambiguously means "the device must exist now but
-				// doesn't". An agent restart leaves the sandbox intact
-				// and never reaches here, so re-creating on demand
-				// cannot duplicate a healthy in-pod link. Every
-				// Device.Setup is idempotent (dummy adopts/recreates
-				// via EEXIST, sr-iov re-applies VLAN, dummy is a no-op),
-				// so this is safe to retry.
+				// An agent-only restart synchronizes the existing sandbox and does not
+				// reach this path, so this cannot duplicate a healthy in-pod link.
 				if !errors.As(err, &netlink.LinkNotFoundError{}) {
 					return err
 				}
@@ -179,8 +207,8 @@ func (driver *Driver) RunPodSandbox(ctx context.Context, podSandbox *api.PodSand
 				log.InfoContext(ctx, "allocated device link not found; re-creating on demand",
 					logfields.Device, a.Device.KernelIfName())
 
-				if setupErr := a.Device.Setup(a.Config); setupErr != nil {
-					return fmt.Errorf("failed to re-create device %s on demand: %w", a.Device.KernelIfName(), setupErr)
+				if err := driver.recoverAllocationDevice(a); err != nil {
+					return err
 				}
 
 				l, err = safenetlink.LinkByName(a.Device.KernelIfName())
@@ -200,14 +228,22 @@ func (driver *Driver) RunPodSandbox(ctx context.Context, podSandbox *api.PodSand
 					return fmt.Errorf("failed to set interface name: %w", err)
 				}
 
+				if err := driver.configureIPs(l, addrAdd, a.Config.IPv4Addr, a.Config.IPv6Addr); err != nil {
+					return err
+				}
+
 				if err := netlink.LinkSetUp(l); err != nil {
 					return err
+				}
+
+				if err := driver.configureSysctl(l, a.Config); err != nil {
+					return fmt.Errorf("failed to configure sysctl for device %s: %w", l.Attrs().Name, err)
 				}
 
 				return nil
 			}); err != nil {
 				log.ErrorContext(ctx, "failed to configure device",
-					logfields.Device, a.Device.IfName,
+					logfields.Device, a.Device.IfName(),
 					logfields.Error, err)
 				return err
 			}
@@ -217,6 +253,21 @@ func (driver *Driver) RunPodSandbox(ctx context.Context, podSandbox *api.PodSand
 	})
 
 	return err
+}
+
+func (driver *Driver) recoverAllocationDevice(a *allocation) error {
+	name := a.Device.KernelIfName()
+	recovered, err := a.Device.Recover(a.deviceAllocation())
+	if err != nil {
+		return fmt.Errorf("failed to re-create device %s on demand: %w", name, err)
+	}
+	if recovered == nil {
+		return fmt.Errorf("device %s returned no recovered device", name)
+	}
+
+	a.Device = recovered
+	driver.updateAllocationDevice(*a)
+	return nil
 }
 
 // StopPodSandbox is called when a pod sandbox is stopped.
@@ -250,6 +301,9 @@ func (driver *Driver) StopPodSandbox(ctx context.Context, podSandbox *api.PodSan
 			log.DebugContext(ctx, "no allocation found")
 			return nil
 		}
+		if !hasNRIManagedInterface(podAllocations) {
+			return nil
+		}
 
 		nsPath := path.Join(podNetNSPath, path.Base(networkNamespace))
 
@@ -269,6 +323,10 @@ func (driver *Driver) StopPodSandbox(ctx context.Context, podSandbox *api.PodSan
 
 		if err := podNs.Do(func() error {
 			for _, a := range podAllocations {
+				if a.Manager == types.DeviceManagerTypeRXQueue {
+					// CNI owns the Pod netkit and tears it down with the sandbox.
+					continue
+				}
 				if a.Manager == types.DeviceManagerTypeDummy {
 					// dummy device is an on-demand virtual device: the
 					// netns delete that follows tears them down, so there is
@@ -284,6 +342,10 @@ func (driver *Driver) StopPodSandbox(ctx context.Context, podSandbox *api.PodSan
 
 				l, err := safenetlink.LinkByName(ifName)
 				if err != nil {
+					return err
+				}
+
+				if err := driver.configureIPs(l, addrDel, a.Config.IPv4Addr, a.Config.IPv6Addr); err != nil {
 					return err
 				}
 
@@ -382,6 +444,61 @@ func configureIfName(l netlink.Link, newIfName string) (netlink.Link, error) {
 	return l, nil
 }
 
+// configureSysctl applies the device config's interface-scoped sysctl
+// settings inside the current (pod) netns. Must run after the interface has
+// its final pod-facing name. Per-netns sysctls are torn down with the
+// namespace, so StopPodSandbox has no corresponding revert.
+func (driver *Driver) configureSysctl(l netlink.Link, cfg types.DeviceConfig) error {
+	settings := buildSysctlSettings(cfg, l.Attrs().Name)
+	if len(settings) == 0 {
+		return nil
+	}
+	return sysctl.NewDirectSysctl(afero.NewOsFs(), driver.hostProcPath).ApplySettings(settings)
+}
+
+// rxQueueLeaser is implemented by prepared RX queue devices.
+type rxQueueLeaser interface {
+	LeaseRXQueue(*netns.NetNS) error
+}
+
+var openPodNetNS = netns.OpenPinned
+
+// leaseRXQueues leases each RX queue allocated to a Pod to its existing
+// interface in the Pod network namespace at nsPath.
+func leaseRXQueues(nsPath string, allocations []allocation) error {
+	var podNs *netns.NetNS
+	for _, a := range allocations {
+		if a.Manager != types.DeviceManagerTypeRXQueue {
+			continue
+		}
+		leaser, ok := a.Device.(rxQueueLeaser)
+		if !ok {
+			return fmt.Errorf("RX queue device %s does not support leasing", a.DeviceName)
+		}
+		if podNs == nil {
+			ns, err := openPodNetNS(nsPath)
+			if err != nil {
+				return fmt.Errorf("failed to open pinned netns at %s: %w", nsPath, err)
+			}
+			defer ns.Close()
+			podNs = ns
+		}
+		if err := leaser.LeaseRXQueue(podNs); err != nil {
+			return fmt.Errorf("failed to lease RX queue from device %s: %w", a.DeviceName, err)
+		}
+	}
+	return nil
+}
+
+func hasNRIManagedInterface(allocations []allocation) bool {
+	for _, allocation := range allocations {
+		if allocation.Manager != types.DeviceManagerTypeRXQueue {
+			return true
+		}
+	}
+	return false
+}
+
 // validateInterfaceNames checks if a pod's set of allocated devices
 // contain valid interface names, that dont collide with interfaces in the pod namespace.
 func validateInterfaceNames(alloc []allocation) error {
@@ -397,6 +514,9 @@ func validateInterfaceNames(alloc []allocation) error {
 
 	// Check if any of our planned renames would collide with existing interfaces
 	for _, a := range alloc {
+		if a.Manager == types.DeviceManagerTypeRXQueue {
+			continue
+		}
 		if a.Config.PodIfName != "" && existingNames[a.Config.PodIfName] {
 			return fmt.Errorf(
 				"interface name collision: %q already exists in pod namespace (possibly from CNI)",
@@ -405,4 +525,37 @@ func validateInterfaceNames(alloc []allocation) error {
 	}
 
 	return nil
+}
+
+func (driver *Driver) configureIPs(l netlink.Link, action ipamAction, ipv4, ipv6 netip.Prefix) error {
+	var (
+		addrs []netlink.Addr
+		errs  error
+	)
+
+	if ipv4.IsValid() {
+		addrs = append(addrs, netlink.Addr{
+			IPNet: netipx.PrefixIPNet(ipv4),
+		})
+	}
+	if ipv6.IsValid() {
+		addrs = append(addrs, netlink.Addr{
+			IPNet: netipx.PrefixIPNet(ipv6),
+		})
+	}
+
+	for _, addr := range addrs {
+		switch action {
+		case addrAdd:
+			if err := netlink.AddrAdd(l, &addr); err != nil {
+				errs = errors.Join(errs, fmt.Errorf("failed to add addr %s to device %s: %w", addr.String(), l.Attrs().Name, err))
+			}
+		case addrDel:
+			if err := netlink.AddrDel(l, &addr); err != nil {
+				errs = errors.Join(errs, fmt.Errorf("failed to delete addr %s to device %s: %w", addr.String(), l.Attrs().Name, err))
+			}
+		}
+	}
+
+	return errs
 }

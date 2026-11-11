@@ -92,7 +92,7 @@ go_release = [line.rstrip()[len("go "):]
               for line in go_mod if line.startswith("go ")][0]
 
 # The upstream Gateway API version referenced across the documentation.
-gateway_api_version = 'v1.6.1'
+gateway_api_version = 'v1.6.3'
 gateway_api_raw_base_url = (
     'https://raw.githubusercontent.com/kubernetes-sigs/gateway-api/' +
     gateway_api_version
@@ -190,7 +190,8 @@ exclude_patterns = [
     '.DS_Store',
     # Already included as a fragment from another page, including it in source
     # processing would process the labels twice
-    'operations/troubleshooting_clustermesh.rst'
+    'operations/troubleshooting_clustermesh.rst',
+    'installation/alibabacloud.rst'
 ]
 
 # The name of the Pygments (syntax highlighting) style to use.

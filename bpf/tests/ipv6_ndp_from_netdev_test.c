@@ -5,8 +5,8 @@
 #include "common.h"
 #include "pktgen.h"
 
-#define ENABLE_IPV4
-#define ENABLE_IPV6
+#define ENABLE_IPV4 1
+#define ENABLE_IPV6 1
 
 #include "lib/bpf_host.h"
 
@@ -15,6 +15,7 @@
 
 #include "scapy.h"
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
 ASSIGN_CONFIG(union macaddr, interface_mac, {.addr = mac_two_addr})
 
 /* packet defined in ./scapy/ipv6_ndp_pkt_defs.py */

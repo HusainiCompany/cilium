@@ -31,12 +31,14 @@ import (
 	endpoint "github.com/cilium/cilium/pkg/endpoint/types"
 	"github.com/cilium/cilium/pkg/endpointmanager"
 	"github.com/cilium/cilium/pkg/eventqueue"
+	iputil "github.com/cilium/cilium/pkg/ip"
 	k8sClient "github.com/cilium/cilium/pkg/k8s/client"
 	"github.com/cilium/cilium/pkg/kvstore"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	monitorAgent "github.com/cilium/cilium/pkg/monitor/agent"
 	"github.com/cilium/cilium/pkg/mtu"
+	networkdriverConfig "github.com/cilium/cilium/pkg/networkdriver/config"
 	"github.com/cilium/cilium/pkg/node"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/policy"
@@ -83,6 +85,7 @@ type configModifyApiHandlerParams struct {
 	WgConfig        wgTypes.Config
 	ConnectorConfig connector.Config
 	LocalNodeStore  *node.LocalNodeStore
+	NetworkDriver   networkdriverConfig.Config
 
 	EventHandler *ConfigModifyEventHandler
 }
@@ -111,6 +114,7 @@ func newConfigModifyApiHandler(params configModifyApiHandlerParams) configModify
 			wgConfig:        params.WgConfig,
 			connectorConfig: params.ConnectorConfig,
 			localNodeStore:  params.LocalNodeStore,
+			networkDriver:   params.NetworkDriver.Enabled,
 		},
 		PatchConfigHandler: &patchConfigHandler{
 			logger:       params.Logger,
@@ -370,6 +374,7 @@ type getConfigHandler struct {
 	wgConfig        wgTypes.Config
 	connectorConfig connector.Config
 	localNodeStore  *node.LocalNodeStore
+	networkDriver   bool
 }
 
 func (h *getConfigHandler) Handle(params daemonapi.GetConfigParams) middleware.Responder {
@@ -395,6 +400,7 @@ func (h *getConfigHandler) Handle(params daemonapi.GetConfigParams) middleware.R
 	// Manually add fields that are behind accessors.
 	devs, _ := datapathTables.SelectedDevices(h.devices, h.db.ReadTxn())
 	m["Devices"] = datapathTables.DeviceNames(devs)
+	m["EnableNetworkDriver"] = h.networkDriver
 
 	spec := &models.DaemonConfigurationSpec{
 		Options:           *option.Config.Opts.GetMutableModel(),
@@ -458,16 +464,16 @@ func (h *getConfigHandler) getNodeRouterAddressing(ctx context.Context) (*models
 	if h.daemonConfig.EnableIPv6 {
 		nodeRouterAddressing.IPv6 = &models.NodeAddressingElement{
 			Enabled:    h.daemonConfig.EnableIPv6,
-			IP:         ln.GetCiliumInternalIPv6().String(),
-			AllocRange: ln.IPv6AllocCIDR.String(),
+			IP:         iputil.AddrFrom(ln.GetCiliumInternalIPv6()),
+			AllocRange: ln.IPv6AllocCIDR.Prefix,
 		}
 	}
 
 	if h.daemonConfig.EnableIPv4 {
 		nodeRouterAddressing.IPv4 = &models.NodeAddressingElement{
 			Enabled:    h.daemonConfig.EnableIPv4,
-			IP:         ln.GetCiliumInternalIPv4().String(),
-			AllocRange: ln.IPv4AllocCIDR.String(),
+			IP:         iputil.AddrFrom(ln.GetCiliumInternalIPv4()),
+			AllocRange: ln.IPv4AllocCIDR.Prefix,
 		}
 	}
 

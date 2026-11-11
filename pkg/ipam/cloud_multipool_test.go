@@ -55,7 +55,7 @@ func newTestCloudMultiPoolAllocator(t *testing.T, resolver RoutingMetadataResolv
 	t.Helper()
 
 	logger := hivetest.Logger(t)
-	mgr := &multiPoolManager{
+	mgr := &MultiPoolManager{
 		logger:            logger,
 		ipv4Enabled:       true,
 		pools:             map[Pool]*poolPair{},
@@ -86,6 +86,30 @@ func inUseIPs(t *testing.T, a *cloudMultiPoolAllocator) int {
 	pool, ok := a.manager.pools[cloudTestPool]
 	require.True(t, ok)
 	return pool.v4.inUseIPCount()
+}
+
+func TestCloudMultiPoolRoutingMetadata(t *testing.T) {
+	addr := netip.MustParseAddr("10.20.30.2")
+	resolver := &fakeResolver{}
+	a := newTestCloudMultiPoolAllocator(t, resolver, &ciliumv2.CiliumNode{})
+	ipam := &IPAM{ipv4RoutingMetadataResolver: a}
+
+	result, err := a.Allocate(addr, "test1", cloudTestPool)
+	require.NoError(t, err)
+
+	// The endpoint routing reconciler uses the public lookup API. An empty
+	// pool name must resolve to the default pool without allocating again.
+	resolved, err := ipam.ResolveRoutingMetadata(addr, "")
+	require.NoError(t, err)
+	require.Equal(t, result, resolved)
+	require.Equal(t, mac.MustParseMAC("00:00:5e:00:53:01"), resolved.PrimaryMAC)
+	require.Equal(t, "0", resolved.InterfaceNumber)
+	require.Equal(t, netip.MustParseAddr("10.20.30.1"), resolved.GatewayIP)
+	require.Equal(t, 1, inUseIPs(t, a))
+	require.Equal(t, []Pool{cloudTestPool, cloudTestPool}, resolver.seenPools)
+
+	_, err = ipam.ResolveRoutingMetadata(netip.MustParseAddr("2001:db8::1"), PoolDefault())
+	require.ErrorIs(t, err, ErrRoutingMetadataUnsupported)
 }
 
 func TestCloudMultiPoolAllocatorEnrichesResults(t *testing.T) {

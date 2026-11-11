@@ -6,14 +6,10 @@
 #include "pktgen.h"
 
 /* Enable code paths under test */
-#define ENABLE_IPV4
-#define ENABLE_IPV6
-#define ENABLE_NODEPORT
-#define ENABLE_NODEPORT_ACCELERATION
+#define ENABLE_IPV4 1
+#define ENABLE_IPV6 1
 
-#define ENABLE_EGRESS_GATEWAY
-#define ENABLE_MASQUERADE_IPV4	1
-#define ENABLE_MASQUERADE_IPV6	1
+#define ENABLE_EGRESS_GATEWAY	1
 
 #define ENCAP_IFINDEX		42
 
@@ -32,13 +28,19 @@ mock_fib_lookup(__maybe_unused void *ctx, struct bpf_fib_lookup *params,
 
 #include "lib/bpf_xdp.h"
 
+ASSIGN_CONFIG(bool, enable_masquerade_ipv6, true)
+
 #include "lib/egressgw.h"
 #include "lib/ipcache.h"
 
 ASSIGN_CONFIG(bool, enable_endpoint_routes, true)
 ASSIGN_CONFIG(__u8, tunnel_protocol, TUNNEL_PROTOCOL_VXLAN)
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
 ASSIGN_CONFIG(union v4addr, ipv4_direct_routing, { .be32 = v4_node_one }) /* gateway node */
+ASSIGN_CONFIG(bool, enable_nodeport_acceleration, true)
+ASSIGN_CONFIG(bool, enable_masquerade_ipv4, true)
+ASSIGN_CONFIG(bool, enable_nodeport, true)
 
 /* Set port ranges to have deterministic source port selection */
 #include "nodeport_defaults.h"

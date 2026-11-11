@@ -105,6 +105,10 @@ func (d *mockCIDRAllocator) IsFull() bool {
 	panic("d.IsFull should not have been called!")
 }
 
+func (d *mockCIDRAllocator) Capacity() int {
+	return 0
+}
+
 func (d *mockCIDRAllocator) InRange(prefix netip.Prefix) bool {
 	if d.OnInRange != nil {
 		return d.OnInRange(prefix)
@@ -120,9 +124,11 @@ func (d *mockCIDRAllocator) Prefix() netip.Prefix {
 	return netip.MustParsePrefix("10.0.0.0/24")
 }
 
-func (d *mockCIDRAllocator) SetReservedRanges(ranges []netipx.IPRange) error {
-	return nil
+func (d *mockCIDRAllocator) ComputeRangesToReserve(ranges []netipx.IPRange) (cidralloc.RangesToReserve, error) {
+	return cidralloc.NewRangesToReserve(), nil
 }
+
+func (d *mockCIDRAllocator) SetReservedRanges(rangesToReserve cidralloc.RangesToReserve) {}
 
 type k8sNodeMock struct {
 	OnUpdate       func(oldNode, newNode *v2.CiliumNode) (*v2.CiliumNode, error)

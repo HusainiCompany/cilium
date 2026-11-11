@@ -106,13 +106,13 @@ env:
   clusterName: ${{ github.event.repository.name }}-${{ github.run_id }}-${{ inputs.UID }}-${{ github.run_attempt }}
   USE_GKE_GCLOUD_AUTH_PLUGIN: True
   # renovate: datasource=docker depName=google/cloud-sdk
-  gcloud_version: 585.0.0
+  gcloud_version: 592.0.0
 
 jobs:
   echo-inputs:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     name: Echo Workflow Dispatch Inputs
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Echo Workflow Dispatch Inputs
         run: |
@@ -120,7 +120,7 @@ jobs:
 
   commit-status-start:
     name: Commit Status Start
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Set initial commit status
         uses: cilium/actions/set-commit-status@687b48a0547e534dd7270d5069a5ab7967c0e907 # main
@@ -129,7 +129,7 @@ jobs:
 
   generate-matrix:
     name: Generate Matrix
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
       empty: ${{ steps.set-matrix.outputs.empty }}
@@ -166,12 +166,15 @@ jobs:
           # Use complete matrix in case of scheduled run
           # main -> event_name = schedule
           # other stable branches -> PR-number starting with v (e.g. v1.14)
-          VERSIONS=$(echo "${EXTRA_ARGS}" | awk -F'=' '{print $2}')
-          IPSEC=$(echo "${EXTRA_ARGS}" | sed 's/^""$/{}/' | jq -r '.["ipsec"] // false')
-          WG=$(echo "${EXTRA_ARGS}" | sed 's/^""$/{}/' | jq -r '.["wireguard"] // false')
-          KPR=$(echo "${EXTRA_ARGS}" | sed 's/^""$/{}/' | jq -r '.["kpr"] // false')
-          BPFMASQV4=$(echo "${EXTRA_ARGS}" | sed 's/^""$/{}/' | jq -r '.["bpf-masq-v4"] // false')
-          ADV_FEAT=$(echo "${EXTRA_ARGS}" | sed 's/^""$/{}/' | jq -r '.["advanced-features"] // false')
+          # ariane passes a comment's capture as a JSON string such as "versions=all", callers pass an object.
+          ARGS=$(jq -Rc '. as $raw | (try fromjson catch $raw) | if type == "object" then . elif type == "string" and contains("=") then (split("=") | {(.[0]): .[1]}) else {} end' <<< "${EXTRA_ARGS}")
+          echo "GKE_EXTRA_ARGS=${ARGS}" >> "${GITHUB_ENV}"
+          VERSIONS=$(jq -r '.versions // ""' <<< "${ARGS}")
+          IPSEC=$(jq -r '.ipsec // false' <<< "${ARGS}")
+          WG=$(jq -r '.wireguard // false' <<< "${ARGS}")
+          KPR=$(jq -r '.kpr // false' <<< "${ARGS}")
+          BPFMASQV4=$(jq -r '.["bpf-masq-v4"] // false' <<< "${ARGS}")
+          ADV_FEAT=$(jq -r '.["advanced-features"] // false' <<< "${ARGS}")
 
           # shellcheck disable=SC2193
           if [[ "${{ github.event_name }}" == "schedule" || "${PR_NUMBER}" == v* || "$VERSIONS" == "all" ]];then
@@ -233,10 +236,8 @@ jobs:
 
       - name: Filter Matrix
         id: set-matrix
-        env:
-          EXTRA_ARGS: ${{ inputs.extra-args }}
         run: |
-          CHANNEL=$(echo "${EXTRA_ARGS}" | grep "channel" | awk -F'=' '{print $2}' | tr '[:lower:]' '[:upper:]')
+          CHANNEL=$(jq -r '.channel // "" | ascii_upcase' <<< "${GKE_EXTRA_ARGS}")
           if [ "$CHANNEL" == "" ];then
             FILTER="channels.channel=REGULAR"
           elif [ "$CHANNEL" == "NONE" ];then
@@ -267,7 +268,7 @@ jobs:
 
   wait-for-images:
     name: Wait for images
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - name: Checkout context ref (trusted)
@@ -290,7 +291,7 @@ jobs:
     name: Installation and Connectivity Test
     needs: [generate-matrix, wait-for-images]
     if: ${{ needs.generate-matrix.outputs.empty == 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # Enough headroom for the cluster creation to fall back to another zone.
     timeout-minutes: 90
     env:
@@ -301,6 +302,10 @@ jobs:
 
     steps:
       - name: Set commit status to pending
+        # commit-status-start does not re-run, so this is only needed on a re-run. It's ok
+        # to continue on error since the check is reported at the end of the test.
+        if: ${{ github.run_attempt != '1' }}
+        continue-on-error: true
         uses: cilium/actions/set-commit-status@687b48a0547e534dd7270d5069a5ab7967c0e907 # main
         with:
           sha: ${{ inputs.SHA || github.sha }}
@@ -458,7 +463,7 @@ jobs:
             --docker-password="${{ secrets.DOCKER_READ_PASSWORD }}"
 
       - name: Install Cilium CLI
-        uses: cilium/cilium-cli@c5e42236c7d90bd50e7975ac587f77782666a0aa # v0.20.0
+        uses: cilium/cilium-cli@1ac7fa66909e3730ab3869c8ba7aa7d68f0197fd # v0.20.2
         with:
           skip-build: ${{ env.CILIUM_CLI_SKIP_BUILD }}
           image-repo: ${{ env.CILIUM_CLI_IMAGE_REPO }}
@@ -532,7 +537,7 @@ jobs:
           external-target-fake-dns: true
           hubble: false
           include-unsafe-tests: true
-          test-concurrency: 5
+          test-concurrency: 3
 
       - name: Set up job variables for connectivity tests
         id: vars-conn

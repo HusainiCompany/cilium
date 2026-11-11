@@ -26,13 +26,10 @@
 #define ENCAP_IFINDEX 1
 
 /* Overlapping PodCIDR is only supported for IPv4 for now */
-#define ENABLE_IPV4
+#define ENABLE_IPV4 1
 
 /* Overlapping PodCIDR depends on tunnel */
-#define TUNNEL_MODE
-
-/* Fully enable KPR since kubeproxy doesn't understand cluster aware addressing */
-#define ENABLE_NODEPORT
+#define TUNNEL_MODE 1
 
 /* Cluster-aware addressing is mandatory for overlapping PodCIDR support */
 #define ENABLE_CLUSTER_AWARE_ADDRESSING		1
@@ -56,7 +53,9 @@ ASSIGN_CONFIG(__u32, cluster_id, 1)
 /* Set the LXC source address to be the address of the backend pod */
 ASSIGN_CONFIG(union v4addr, endpoint_ipv4, { .be32 = BACKEND_IP})
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
 ASSIGN_CONFIG(bool, enable_conntrack_accounting, true)
+ASSIGN_CONFIG(bool, enable_nodeport, true)
 
 #include "lib/ipcache.h"
 #include "lib/policy.h"

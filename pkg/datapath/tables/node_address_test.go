@@ -300,6 +300,34 @@ var nodeAddressTests = []struct {
 			netip.MustParseAddr("2600:beef::1"),
 		},
 	},
+
+	{
+		name: "ipv6 prefer non-deprecated over numerically lower deprecated",
+		addrs: []DeviceAddress{
+			{
+				Addr:       netip.MustParseAddr("2600:beef::1"), // numerically lower, but deprecated
+				Deprecated: true,
+				Scope:      RT_SCOPE_UNIVERSE,
+			},
+			{
+				Addr:  netip.MustParseAddr("2600:beef::2"), // higher, but preferred (non-deprecated)
+				Scope: RT_SCOPE_UNIVERSE,
+			},
+		},
+		wantAddrs: []netip.Addr{
+			ciliumHostIP,
+			ciliumHostIPLinkScoped,
+			netip.MustParseAddr("2600:beef::1"),
+			netip.MustParseAddr("2600:beef::2"),
+		},
+		wantPrimary: []netip.Addr{
+			ciliumHostIP,
+			netip.MustParseAddr("2600:beef::2"),
+		},
+		wantNodePort: []netip.Addr{
+			netip.MustParseAddr("2600:beef::2"),
+		},
+	},
 }
 
 func TestNodeAddress(t *testing.T) {
@@ -775,7 +803,7 @@ func TestNodeAddressNodeIPChange(t *testing.T) {
 
 	// Make the 10.0.0.1 the new NodeIP.
 	localNodeStore.Update(func(n *node.LocalNode) {
-		n.SetNodeExternalIP(net.ParseIP("10.0.0.1"))
+		n.SetNodeExternalIP(netip.MustParseAddr("10.0.0.1"))
 	})
 	<-watch
 
@@ -838,8 +866,8 @@ type testLocalNodeSync struct{}
 
 // InitLocalNode implements node.LocalNodeSynchronizer.
 func (t testLocalNodeSync) InitLocalNode(_ context.Context, n *node.LocalNode) error {
-	n.SetNodeExternalIP(testNodeIPv4.AsSlice())
-	n.SetNodeExternalIP(testNodeIPv6.AsSlice())
+	n.SetNodeExternalIP(testNodeIPv4)
+	n.SetNodeExternalIP(testNodeIPv6)
 	return nil
 }
 
@@ -905,6 +933,20 @@ func TestSortedAddresses(t *testing.T) {
 		{
 			{Addr: netip.MustParseAddr("1002::1"), Scope: RT_SCOPE_SITE},
 			{Addr: netip.MustParseAddr("1001::1"), Scope: RT_SCOPE_UNIVERSE, Secondary: true},
+		},
+
+		// Preferred vs Deprecated
+		{
+			{Addr: netip.MustParseAddr("2.2.2.2"), Scope: RT_SCOPE_SITE},
+			{Addr: netip.MustParseAddr("1.1.1.1"), Scope: RT_SCOPE_UNIVERSE, Deprecated: true},
+		},
+		{
+			{Addr: netip.MustParseAddr("1002::1"), Scope: RT_SCOPE_SITE},
+			{Addr: netip.MustParseAddr("1001::1"), Scope: RT_SCOPE_UNIVERSE, Deprecated: true},
+		},
+		{
+			{Addr: netip.MustParseAddr("2001:db8::2"), Scope: RT_SCOPE_UNIVERSE},
+			{Addr: netip.MustParseAddr("2001:db8::1"), Scope: RT_SCOPE_UNIVERSE, Deprecated: true},
 		},
 
 		// Scope

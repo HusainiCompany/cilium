@@ -5,38 +5,28 @@
 
 #include <linux/udp.h>
 #include <linux/ip.h>
+#include "auxvars.h"
 #include "identity.h"
 #include "tunnel.h"
 
 static __always_inline __maybe_unused void
 bpf_clear_meta(struct xdp_md *ctx __maybe_unused)
 {
-	__u32 zero = 0, *data_meta = map_lookup_elem(&cilium_xdp_scratch, &zero);
-
-	/* Unlike __sk_buff->cb[] in tcx (per-skb), the XDP "meta" lives
-	 * in a per-CPU PERCPU_ARRAY (cilium_xdp_scratch) that persists
-	 * across packets on the same CPU. CB slots can alias. Thus zero
-	 * the CB region on each program entry to mirror the TC behavior.
-	 * Leave RECIRC_MARKER / XFER_MARKER (offsets 5/6) intact; they
-	 * have their own dedicated clears.
+	/* Unlike __sk_buff->cb[] in tcx (per-skb), the XDP "meta" lives in a
+	 * per-CPU auxvar (cilium_xdp_scratch) that persists across packets
+	 * on the same CPU. CB slots can alias. Thus zero it on each program
+	 * entry to mirror the TC behavior.
 	 */
-	if (always_succeeds(data_meta)) {
-		data_meta[0] = 0;
-		data_meta[1] = 0;
-		data_meta[2] = 0;
-		data_meta[3] = 0;
-		data_meta[4] = 0;
-	}
+	AUX(cilium_xdp_scratch);
 }
 
 static __always_inline __maybe_unused void
 ctx_store_meta_ipv6(struct xdp_md *ctx __maybe_unused, const __u64 off,
 		    const union v6addr *addr)
 {
-	__u32 zero = 0, *data_meta = map_lookup_elem(&cilium_xdp_scratch, &zero);
+	struct cilium_xdp_scratch *scratch = AUX_REUSE(cilium_xdp_scratch);
 
-	if (always_succeeds(data_meta))
-		memcpy(&data_meta[off], addr, sizeof(*addr));
+	memcpy(&scratch->data[off], addr, sizeof(*addr));
 
 	build_bug_on((off + 4) * sizeof(__u32) > META_PIVOT);
 }
@@ -45,10 +35,9 @@ static __always_inline __maybe_unused void
 ctx_load_meta_ipv6(const struct xdp_md *ctx __maybe_unused,
 		   union v6addr *addr, const __u64 off)
 {
-	__u32 zero = 0, *data_meta = map_lookup_elem(&cilium_xdp_scratch, &zero);
+	struct cilium_xdp_scratch *scratch = AUX_REUSE(cilium_xdp_scratch);
 
-	if (always_succeeds(data_meta))
-		memcpy(addr, &data_meta[off], sizeof(*addr));
+	memcpy(addr, &scratch->data[off], sizeof(*addr));
 
 	build_bug_on((off + 4) * sizeof(__u32) > META_PIVOT);
 }
@@ -79,29 +68,25 @@ neigh_resolver_available(void)
 #define XFER_MARKER	6 /* xdp -> skb meta transfer */
 
 static __always_inline __maybe_unused void
-ctx_skip_nodeport_clear(struct xdp_md *ctx __maybe_unused)
+ctx_skip_nodeport_clear(struct xdp_md *ctx)
 {
-#ifdef ENABLE_NODEPORT
-	ctx_store_meta(ctx, RECIRC_MARKER, 0);
-#endif
+	if (NODEPORT_ENABLED)
+		ctx_store_meta(ctx, RECIRC_MARKER, 0);
 }
 
 static __always_inline __maybe_unused void
-ctx_skip_nodeport_set(struct xdp_md *ctx __maybe_unused)
+ctx_skip_nodeport_set(struct xdp_md *ctx)
 {
-#ifdef ENABLE_NODEPORT
-	ctx_store_meta(ctx, RECIRC_MARKER, 1);
-#endif
+	if (NODEPORT_ENABLED)
+		ctx_store_meta(ctx, RECIRC_MARKER, 1);
 }
 
 static __always_inline __maybe_unused bool
-ctx_skip_nodeport(struct xdp_md *ctx __maybe_unused)
+ctx_skip_nodeport(struct xdp_md *ctx)
 {
-#ifdef ENABLE_NODEPORT
+	if (!NODEPORT_ENABLED)
+		return true;
 	return ctx_load_meta(ctx, RECIRC_MARKER);
-#else
-	return true;
-#endif
 }
 
 static __always_inline __maybe_unused __u32
@@ -156,7 +141,6 @@ static __always_inline bool ctx_snat_done(struct xdp_md *ctx)
 	return ctx_load_meta(ctx, XFER_MARKER) & XFER_PKT_SNAT_DONE;
 }
 
-#ifdef HAVE_ENCAP
 static __always_inline __maybe_unused int
 ctx_set_encap_info4(struct xdp_md *ctx, __u32 src_ip, __be16 src_port,
 		    __u32 daddr, __u32 seclabel, __u32 vni __maybe_unused,
@@ -246,4 +230,3 @@ ctx_set_encap_info6(struct xdp_md *ctx __maybe_unused,
 {
 	return 0;
 }
-#endif /* HAVE_ENCAP */

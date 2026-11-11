@@ -7,13 +7,15 @@ import (
 	"net/netip"
 	"testing"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v8"
-	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/network/armnetwork/v11"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/compute/armcompute/v9"
+	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/network/armnetwork/v12"
 	"github.com/cilium/hive/hivetest"
 	"github.com/stretchr/testify/require"
 
+	"github.com/cilium/cilium/pkg/azure/types"
 	iputil "github.com/cilium/cilium/pkg/ip"
 	ipamTypes "github.com/cilium/cilium/pkg/ipam/types"
+	"github.com/cilium/cilium/pkg/mac"
 )
 
 func TestParseInterface(t *testing.T) {
@@ -169,6 +171,83 @@ func TestParseInterface(t *testing.T) {
 			} else {
 				require.Equal(t, tt.expectedAddrs, gotAddrs)
 			}
+		})
+	}
+}
+
+// newInterfaceWithMAC builds an armnetwork.Interface attached to the given VM,
+// with macAddress reported by the Azure API verbatim (empty means the API
+// returned no MAC, as happens while the interface is still provisioning).
+func newInterfaceWithMAC(id, vmID, macAddress string) *armnetwork.Interface {
+	iface := &armnetwork.Interface{
+		ID:   new(id),
+		Name: new(id),
+		Properties: &armnetwork.InterfacePropertiesFormat{
+			VirtualMachine: &armnetwork.SubResource{ID: new(vmID)},
+		},
+	}
+	if macAddress != "" {
+		iface.Properties.MacAddress = new(macAddress)
+	}
+	return iface
+}
+
+func TestParseInterfacesIntoInstanceMapSkipsInterfacesWithoutMAC(t *testing.T) {
+	const vmID = "/subscriptions/xxx/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm1"
+
+	c := &Client{logger: hivetest.Logger(t)}
+	instances := c.ParseInterfacesIntoInstanceMap([]*armnetwork.Interface{
+		newInterfaceWithMAC("nic-ready", vmID, "AA-BB-CC-DD-EE-FF"),
+		newInterfaceWithMAC("nic-provisioning", vmID, ""),
+	}, nil)
+
+	got := []string{}
+	instances.ForeachInterface("", func(instanceID, interfaceID string, iface ipamTypes.Interface) error {
+		got = append(got, interfaceID)
+		return nil
+	})
+	require.Equal(t, []string{"nic-ready"}, got)
+}
+
+func TestParseInterfacesIntoInstanceSkipsInterfacesWithoutMAC(t *testing.T) {
+	const vmID = "/subscriptions/xxx/resourceGroups/rg/providers/Microsoft.Compute/virtualMachines/vm1"
+
+	c := &Client{logger: hivetest.Logger(t)}
+	instance := c.ParseInterfacesIntoInstance([]*armnetwork.Interface{
+		newInterfaceWithMAC("nic-ready", vmID, "AA-BB-CC-DD-EE-FF"),
+		newInterfaceWithMAC("nic-provisioning", vmID, ""),
+	}, nil)
+
+	require.Len(t, instance.Interfaces, 1)
+	require.Contains(t, instance.Interfaces, "nic-ready")
+}
+
+func TestIsMacValid(t *testing.T) {
+	tests := []struct {
+		name     string
+		iface    *types.AzureInterface
+		expected bool
+	}{
+		{
+			name:     "nil interface",
+			iface:    nil,
+			expected: false,
+		},
+		{
+			name:     "unset MAC",
+			iface:    &types.AzureInterface{Name: "nic1", ID: "/nic1"},
+			expected: false,
+		},
+		{
+			name:     "valid MAC",
+			iface:    &types.AzureInterface{Name: "nic1", ID: "/nic1", MAC: mac.MustParseMAC("aa:bb:cc:dd:ee:ff")},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.expected, isMacValid(hivetest.Logger(t), tt.iface))
 		})
 	}
 }
@@ -385,6 +464,141 @@ func TestParseSubnetID(t *testing.T) {
 			if subnet != tt.expectedSubnet {
 				t.Errorf("expected subnet %q, got %q", tt.expectedSubnet, subnet)
 			}
+		})
+	}
+}
+
+func TestRemoveInterfaceIPConfigurations(t *testing.T) {
+	ipConfig := func(name, address string, primary bool) *armnetwork.InterfaceIPConfiguration {
+		return &armnetwork.InterfaceIPConfiguration{
+			Name: new(name),
+			Properties: &armnetwork.InterfaceIPConfigurationPropertiesFormat{
+				PrivateIPAddress: new(address),
+				Primary:          new(primary),
+			},
+		}
+	}
+	primary := ipConfig("primary", "10.0.0.4", true)
+	second := ipConfig("second", "10.0.0.5", false)
+	third := ipConfig("third", "10.0.0.6", false)
+	noName := &armnetwork.InterfaceIPConfiguration{
+		Properties: &armnetwork.InterfaceIPConfigurationPropertiesFormat{PrivateIPAddress: new("10.0.0.7")},
+	}
+	noProperties := &armnetwork.InterfaceIPConfiguration{Name: new("no-properties")}
+	noAddress := &armnetwork.InterfaceIPConfiguration{
+		Name:       new("no-address"),
+		Properties: &armnetwork.InterfaceIPConfigurationPropertiesFormat{},
+	}
+
+	tests := []struct {
+		name        string
+		configs     []*armnetwork.InterfaceIPConfiguration
+		addresses   []string
+		wantKept    []*armnetwork.InterfaceIPConfiguration
+		wantRemoved []string
+		wantErr     bool
+	}{
+		{
+			name:        "match by address",
+			configs:     []*armnetwork.InterfaceIPConfiguration{primary, second, third},
+			addresses:   []string{"10.0.0.5"},
+			wantKept:    []*armnetwork.InterfaceIPConfiguration{primary, third},
+			wantRemoved: []string{"second"},
+		},
+		{
+			name:        "absent address skipped",
+			configs:     []*armnetwork.InterfaceIPConfiguration{primary, second, third},
+			addresses:   []string{"10.0.0.6", "10.0.0.99"},
+			wantKept:    []*armnetwork.InterfaceIPConfiguration{primary, second},
+			wantRemoved: []string{"third"},
+		},
+		{
+			name:      "nothing to remove",
+			configs:   []*armnetwork.InterfaceIPConfiguration{primary, second},
+			addresses: []string{"10.0.0.99"},
+			wantKept:  []*armnetwork.InterfaceIPConfiguration{primary, second},
+		},
+		{
+			name:      "nil name on match errors",
+			configs:   []*armnetwork.InterfaceIPConfiguration{primary, noName},
+			addresses: []string{"10.0.0.7"},
+			wantErr:   true,
+		},
+		{
+			name:        "nil entry, properties and address kept",
+			configs:     []*armnetwork.InterfaceIPConfiguration{nil, noProperties, noAddress, second},
+			addresses:   []string{"10.0.0.5"},
+			wantKept:    []*armnetwork.InterfaceIPConfiguration{nil, noProperties, noAddress},
+			wantRemoved: []string{"second"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			addresses := make([]netip.Addr, 0, len(test.addresses))
+			for _, a := range test.addresses {
+				addresses = append(addresses, netip.MustParseAddr(a))
+			}
+			kept, removed, err := removeInterfaceIPConfigurations(test.configs, addresses)
+			if test.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.wantKept, kept)
+			require.Equal(t, test.wantRemoved, removed)
+		})
+	}
+}
+
+func TestRemoveVMSSIPConfigurations(t *testing.T) {
+	ipConfig := func(name string, primary bool) *armcompute.VirtualMachineScaleSetIPConfiguration {
+		return &armcompute.VirtualMachineScaleSetIPConfiguration{
+			Name:       new(name),
+			Properties: &armcompute.VirtualMachineScaleSetIPConfigurationProperties{Primary: new(primary)},
+		}
+	}
+	primary := ipConfig("primary", true)
+	second := ipConfig("second", false)
+	third := ipConfig("third", false)
+	noName := &armcompute.VirtualMachineScaleSetIPConfiguration{}
+
+	tests := []struct {
+		name     string
+		configs  []*armcompute.VirtualMachineScaleSetIPConfiguration
+		names    []string
+		wantKept []*armcompute.VirtualMachineScaleSetIPConfiguration
+		wantErr  bool
+	}{
+		{
+			name:     "drop by name",
+			configs:  []*armcompute.VirtualMachineScaleSetIPConfiguration{primary, second, third},
+			names:    []string{"second", "third"},
+			wantKept: []*armcompute.VirtualMachineScaleSetIPConfiguration{primary},
+		},
+		{
+			name:    "missing name errors",
+			configs: []*armcompute.VirtualMachineScaleSetIPConfiguration{primary, second},
+			names:   []string{"second", "third"},
+			wantErr: true,
+		},
+		{
+			name:     "nil entries kept",
+			configs:  []*armcompute.VirtualMachineScaleSetIPConfiguration{nil, noName, second},
+			names:    []string{"second"},
+			wantKept: []*armcompute.VirtualMachineScaleSetIPConfiguration{nil, noName},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			kept, err := removeVMSSIPConfigurations(test.configs, test.names)
+			if test.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.wantKept, kept)
 		})
 	}
 }

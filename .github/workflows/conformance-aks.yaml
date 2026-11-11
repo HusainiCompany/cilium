@@ -105,6 +105,7 @@ concurrency:
 env:
   name: ${{ github.repository_owner }}-${{ github.event.repository.name }}-${{ github.run_id }}-${{ inputs.UID }}-${{ github.run_attempt }}
   cost_reduction: --node-vm-size Standard_B2s --node-osdisk-size 64
+  create_timeout_minutes: 54
   ipv4_pod_cidr: 192.168.0.0/16
   ipv6_pod_cidr: fd00::/104
   test_concurrency: 5
@@ -113,7 +114,7 @@ jobs:
   echo-inputs:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     name: Echo Workflow Dispatch Inputs
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Echo Workflow Dispatch Inputs
         run: |
@@ -121,7 +122,7 @@ jobs:
 
   commit-status-start:
     name: Commit Status Start
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Set initial commit status
         uses: cilium/actions/set-commit-status@687b48a0547e534dd7270d5069a5ab7967c0e907 # main
@@ -130,7 +131,7 @@ jobs:
 
   generate-matrix:
     name: Generate Matrix
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
       empty: ${{ steps.set-matrix.outputs.empty }}
@@ -197,7 +198,7 @@ jobs:
 
   wait-for-images:
     name: Wait for images
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - name: Checkout context ref (trusted)
@@ -220,7 +221,7 @@ jobs:
     name: Installation and Connectivity Test
     needs: [generate-matrix, wait-for-images]
     if: ${{ needs.generate-matrix.outputs.empty == 'false' }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 90
     env:
       job_name: "Installation and Connectivity Test"
@@ -230,6 +231,10 @@ jobs:
 
     steps:
       - name: Set commit status to pending
+        # commit-status-start does not re-run, so this is only needed on a re-run. It's ok
+        # to continue on error since the check is reported at the end of the test.
+        if: ${{ github.run_attempt != '1' }}
+        continue-on-error: true
         uses: cilium/actions/set-commit-status@687b48a0547e534dd7270d5069a5ab7967c0e907 # main
         with:
           sha: ${{ inputs.SHA || github.sha }}
@@ -335,10 +340,12 @@ jobs:
           creds: ${{ secrets.AZURE_PR_SP_CREDS }}
 
       - name: Create AKS cluster
-        timeout-minutes: 20
+        id: create-cluster
+        timeout-minutes: ${{ fromJSON(env.create_timeout_minutes) }}
         uses: ./.github/actions/setup-aks-cluster
         with:
           cluster_name: ${{ env.name }}
+          timeout_minutes: ${{ env.create_timeout_minutes }}
           location: ${{ matrix.location }}
           version: ${{ matrix.version }}
           pod_cidrs: ${{ env.ipv4_pod_cidr }},${{ env.ipv6_pod_cidr }}
@@ -359,7 +366,7 @@ jobs:
           # destination is a Pod IP rather than the node IP itself.
           NODE_RESOURCE_GROUP=$(az aks show \
             --resource-group "${{ env.name }}" \
-            --name "${{ env.name }}" \
+            --name "${{ steps.create-cluster.outputs.cluster_name }}" \
             --query nodeResourceGroup \
             --output tsv)
           mapfile -t VMSS_NAMES < <(az vmss list \
@@ -415,7 +422,7 @@ jobs:
             --docker-password="${{ secrets.DOCKER_READ_PASSWORD }}"
 
       - name: Install Cilium CLI
-        uses: cilium/cilium-cli@c5e42236c7d90bd50e7975ac587f77782666a0aa # v0.20.0
+        uses: cilium/cilium-cli@1ac7fa66909e3730ab3869c8ba7aa7d68f0197fd # v0.20.2
         with:
           skip-build: ${{ env.CILIUM_CLI_SKIP_BUILD }}
           image-repo: ${{ env.CILIUM_CLI_IMAGE_REPO }}
@@ -471,7 +478,7 @@ jobs:
           # each overlay PodCIDR.
           NODE_RESOURCE_GROUP=$(az aks show \
             --resource-group "${{ env.name }}" \
-            --name "${{ env.name }}" \
+            --name "${{ steps.create-cluster.outputs.cluster_name }}" \
             --query nodeResourceGroup \
             --output tsv)
           mapfile -t SUBNET_IDS < <(az vmss list \
@@ -549,7 +556,7 @@ jobs:
         run: |
           NODERG=$(az aks show \
             --resource-group ${{ env.name }} \
-            --name ${{ env.name }} \
+            --name ${{ steps.create-cluster.outputs.cluster_name }} \
             --query 'nodeResourceGroup' \
             -o tsv)
           CIDRV4=$(az network vnet list \

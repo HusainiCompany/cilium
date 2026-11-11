@@ -26,6 +26,8 @@ func Overlay(lnc *Config, link netlink.Link) any {
 	cfg.EnableNoServiceEndpointsRoutable = lnc.SvcRouteConfig.EnableNoServiceEndpointsRoutable
 	cfg.EnableServiceNoBackendResponse = option.Config.ServiceNoBackendResponseEnabled()
 	cfg.EnableNetkit = lnc.DatapathIsNetkit
+	cfg.EnableNAT46X64 = option.Config.NodePortNat46X64 && lnc.KPRConfig.KubeProxyReplacement
+	cfg.EnableNAT46X64Gateway = option.Config.EnableNat46X64Gateway && lnc.KPRConfig.KubeProxyReplacement
 
 	cfg.EnableVTEP = option.Config.EnableVTEP
 	if option.Config.EnableVTEP {
@@ -33,6 +35,7 @@ func Overlay(lnc *Config, link netlink.Link) any {
 	}
 
 	cfg.EphemeralMin = lnc.EphemeralMin
+	cfg.SNATCollisionRetries = lnc.SNATCollisionRetries
 
 	cfg.TunnelProtocol = lnc.TunnelProtocol
 	cfg.TunnelPort = lnc.TunnelPort

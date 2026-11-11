@@ -6,10 +6,8 @@
 #include "pktgen.h"
 
 /* Enable code paths under test */
-#define ENABLE_IPV4
-#define ENABLE_NODEPORT
-#define ENABLE_DSR		1
-#define DSR_ENCAP_GENEVE	3
+#define ENABLE_IPV4 1
+#define DSR_ENCAP_MODE DSR_ENCAP_NONE
 
 #define CLIENT_IP		v4_ext_one
 #define CLIENT_PORT		__bpf_htons(111)
@@ -104,8 +102,11 @@ mock_ctx_redirect(const struct __sk_buff *ctx __maybe_unused,
 #include "lib/endpoint.h"
 #include "lib/ipcache.h"
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
 ASSIGN_CONFIG(bool, enable_bpf_host_routing, true)
 ASSIGN_CONFIG(__u32, interface_ifindex, DEFAULT_IFACE)
+ASSIGN_CONFIG(struct dsr_config, dsr_cfg, { .enable = true })
+ASSIGN_CONFIG(bool, enable_nodeport, true)
 
 /* Test that a remote node
  * - doesn't touch a DSR request,

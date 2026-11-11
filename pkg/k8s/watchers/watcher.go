@@ -25,7 +25,6 @@ import (
 	"github.com/cilium/cilium/pkg/labels"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/logging/logfields"
-	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/source"
 )
@@ -54,12 +53,6 @@ type endpointManager interface {
 	GetEndpointsByPodName(string) []*endpoint.Endpoint
 	WaitForEndpointsAtPolicyRev(ctx context.Context, rev uint64) error
 	UpdatePolicyMaps(context.Context) error
-}
-
-type nodeManager interface {
-	NodeDeleted(n nodeTypes.Node)
-	NodeUpdated(n nodeTypes.Node)
-	NodeSync()
 }
 
 type policyManager interface {
@@ -189,16 +182,17 @@ var ciliumResourceToGroupMapping = map[string]watcherInfo{
 	synced.CRDResourceName(v2alpha1.CESName):                              {start, k8sAPIGroupCiliumEndpointSliceV2Alpha1},
 	synced.CRDResourceName(cilium_v2.CCECName):                            {skip, ""}, // Handled in pkg/ciliumenvoyconfig/
 	synced.CRDResourceName(cilium_v2.CECName):                             {skip, ""}, // Handled in pkg/ciliumenvoyconfig/
-	synced.CRDResourceName(v2alpha1.BGPCCName):                            {skip, ""}, // Handled in BGP control plane
-	synced.CRDResourceName(v2alpha1.BGPAName):                             {skip, ""}, // Handled in BGP control plane
-	synced.CRDResourceName(v2alpha1.BGPPCName):                            {skip, ""}, // Handled in BGP control plane
-	synced.CRDResourceName(v2alpha1.BGPNCName):                            {skip, ""}, // Handled in BGP control plane
-	synced.CRDResourceName(v2alpha1.BGPNCOName):                           {skip, ""}, // Handled in BGP control plane
+	synced.CRDResourceName(cilium_v2.BGPCCName):                           {skip, ""}, // Handled in BGP control plane
+	synced.CRDResourceName(cilium_v2.BGPAName):                            {skip, ""}, // Handled in BGP control plane
+	synced.CRDResourceName(cilium_v2.BGPPCName):                           {skip, ""}, // Handled in BGP control plane
+	synced.CRDResourceName(cilium_v2.BGPNCName):                           {skip, ""}, // Handled in BGP control plane
+	synced.CRDResourceName(cilium_v2.BGPNCOName):                          {skip, ""}, // Handled in BGP control plane
 	synced.CRDResourceName(v2alpha1.LBIPPoolName):                         {skip, ""}, // Handled in LB IPAM
 	synced.CRDResourceName(cilium_v2.CNCName):                             {skip, ""}, // Handled by init directly
 	synced.CRDResourceName(cilium_v2.CCGName):                             {waitOnly, k8sAPIGroupCiliumCIDRGroupV2},
 	synced.CRDResourceName(v2alpha1.L2AnnouncementName):                   {skip, ""}, // Handled by L2 announcement directly
 	synced.CRDResourceName(v2alpha1.CPIPName):                             {skip, ""}, // Handled by multi-pool IPAM allocator
+	synced.CRDResourceName(v2alpha1.CRIPName):                             {skip, ""}, // Handled by network driver IPAM allocator
 	synced.CRDResourceName(v2alpha1.CDPPName):                             {skip, ""}, // Handled by datapath plugins
 	synced.CRDResourceName(v2alpha1.CiliumNetworkDriverNodeConfigName):    {skip, ""}, // Handled by Network Driver package
 	synced.CRDResourceName(v2alpha1.CiliumNetworkDriverClusterConfigName): {skip, ""}, // Handled by Network Driver package

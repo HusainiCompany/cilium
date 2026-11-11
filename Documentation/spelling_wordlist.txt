@@ -1,4 +1,5 @@
 AArch
+ACK
 AKS
 ARP
 Alemayhu
@@ -121,6 +122,7 @@ Sharma
 Shirokov
 Shortnames
 Shutdowner
+Sigstore
 Socionext
 Solarflare
 Spectre
@@ -474,6 +476,7 @@ ip
 ipBlock
 ipam
 ipcache
+ipip
 ipmasq
 iproute
 ipsec
@@ -590,6 +593,7 @@ mediabot
 memcache
 memcached
 memcd
+memlock
 microservice
 microservices
 minikube
@@ -602,6 +606,7 @@ modularity
 modularizing
 mountPath
 mov
+ms
 mtk
 mtls
 mtu
@@ -722,6 +727,7 @@ rc
 reStructuredText
 reachability
 readSecretsOnlyFromSecretsNamespace
+rebalance
 rebase
 rebased
 rebasing
@@ -735,6 +741,7 @@ recv
 regenerations
 regexes
 reinitialization
+releaseExcessIPs
 relocations
 removeNodeTaints
 reparsing
@@ -863,6 +870,7 @@ transpiling
 triager
 triagers
 truthy
+ts
 tsne
 tunables
 tunings
@@ -897,6 +905,7 @@ unwinded
 upgradeCompatibility
 uplink
 uprobes
+upsert
 upstreamed
 uptime
 uretprobes
@@ -907,6 +916,8 @@ userspace
 uuid
 vCPU
 vSphere
+vSwitch
+vSwitches
 validator
 vendored
 verifier
@@ -943,5 +954,6 @@ xoring
 xt
 xwing
 yaml
+zeroes
 zsh
 ztunnel

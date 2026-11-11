@@ -18,7 +18,6 @@ import (
 	"github.com/cilium/cilium/pkg/datapath/config"
 	"github.com/cilium/cilium/pkg/datapath/neighbor"
 	"github.com/cilium/cilium/pkg/node"
-	"github.com/cilium/cilium/pkg/node/manager"
 	"github.com/cilium/cilium/pkg/rate"
 	"github.com/cilium/cilium/pkg/time"
 )
@@ -43,7 +42,7 @@ func registerNodeNeighborDiscovery(
 	jobs job.Group,
 	nodes statedb.Table[*node.Node],
 	forwardableIPManager *neighbor.ForwardableIPManager,
-	nodeConfigNotifier *manager.NodeConfigNotifier,
+	nodeConfigNotifier *config.NodeConfigNotifier,
 ) error {
 	if !forwardableIPManager.Enabled() {
 		return nil
@@ -161,8 +160,8 @@ func (o *nodeNeighborObserver) apply(change statedb.Change[*node.Node]) error {
 func nodeIPs(n *node.Node) map[netip.Addr]struct{} {
 	ips := map[netip.Addr]struct{}{}
 	for _, ipv6 := range []bool{false, true} {
-		if ip, ok := netip.AddrFromSlice(n.GetNodeIP(ipv6)); ok {
-			ips[ip.Unmap()] = struct{}{}
+		if ip := n.GetNodeIP(ipv6); ip.IsValid() {
+			ips[ip] = struct{}{}
 		}
 	}
 	return ips

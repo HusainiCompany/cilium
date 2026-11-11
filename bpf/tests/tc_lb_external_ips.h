@@ -8,7 +8,6 @@
 
 #define ENABLE_IPV4		1
 #define ENABLE_IPV6		1
-#define ENABLE_NODEPORT		1
 
 #ifdef NORTH_SOUTH_TEST
 # define CLIENT_IP		v4_ext_one
@@ -17,12 +16,13 @@
 
 #include "lib/bpf_host.h"
 #elif defined(EAST_WEST_TEST)
-# define ENABLE_SOCKET_LB_HOST_ONLY	1
 # define CLIENT_IP			v4_pod_two
 # define CLIENT_IPV6			v6_pod_two
 # define HOOK				pod_send_packet
 
 #include "lib/bpf_lxc.h"
+
+ASSIGN_CONFIG(struct socket_lb_config, socket_lb, { .hostns_only = true })
 #else
 # error "Test direction not defined"
 #endif
@@ -48,8 +48,10 @@
 #include "lib/lb.h"
 #include "scapy.h"
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
 /* For checking statistics in conntrack map. */
 ASSIGN_CONFIG(bool, enable_conntrack_accounting, true)
+ASSIGN_CONFIG(bool, enable_nodeport, true)
 
 /* Expected CT tuple to check for conntrack */
 #define EXPECTED_CT_TUPLE {\

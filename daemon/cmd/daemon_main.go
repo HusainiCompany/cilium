@@ -405,9 +405,6 @@ func InitGlobalFlags(logger *slog.Logger, cmd *cobra.Command, vp *viper.Viper) {
 	flags.MarkHidden(option.AddressScopeMax)
 	option.BindEnv(vp, option.AddressScopeMax)
 
-	flags.Bool(option.EnableLocalRedirectPolicy, false, "Enable Local Redirect Policy")
-	option.BindEnv(vp, option.EnableLocalRedirectPolicy)
-
 	flags.Bool(option.EnableMKE, false, "Enable BPF kube-proxy replacement for MKE environments")
 	flags.MarkHidden(option.EnableMKE)
 	option.BindEnv(vp, option.EnableMKE)
@@ -484,13 +481,13 @@ func InitGlobalFlags(logger *slog.Logger, cmd *cobra.Command, vp *viper.Viper) {
 	flags.Bool(option.EnableIPv4Masquerade, true, "Masquerade IPv4 traffic from endpoints leaving the host")
 	option.BindEnv(vp, option.EnableIPv4Masquerade)
 
-	flags.Bool(option.EnableRemoteNodeMasquerade, false, "Masquerade packets from endpoints leaving the host destined to a remote node in BPF masquerading mode. This option requires to set enable-bpf-masquerade to true.")
+	flags.Bool(option.EnableRemoteNodeMasquerade, true, "Masquerade packets from endpoints leaving the host destined to a remote node's ExternalIP when using BPF masquerading mode")
 	option.BindEnv(vp, option.EnableRemoteNodeMasquerade)
 
 	flags.Bool(option.EnableIPv6Masquerade, true, "Masquerade IPv6 traffic from endpoints leaving the host")
 	option.BindEnv(vp, option.EnableIPv6Masquerade)
 
-	flags.Bool(option.EnableBPFMasquerade, false, "Masquerade packets from endpoints leaving the host with BPF instead of iptables")
+	flags.Bool(option.EnableBPFMasquerade, true, "Masquerade packets from endpoints leaving the host with BPF instead of iptables")
 	option.BindEnv(vp, option.EnableBPFMasquerade)
 
 	flags.Bool(option.EnableMasqueradeRouteSource, false, "Masquerade packets to the source IP provided from the routing layer rather than interface address")
@@ -557,6 +554,7 @@ func InitGlobalFlags(logger *slog.Logger, cmd *cobra.Command, vp *viper.Viper) {
 
 	flags.Bool(option.EnableXDPPrefilter, false, "Enable XDP prefiltering")
 	option.BindEnv(vp, option.EnableXDPPrefilter)
+	flags.MarkDeprecated(option.EnableXDPPrefilter, "This option is obsolete and will be removed in v1.22")
 
 	flags.Bool(option.EnableTCX, true, "Attach endpoint programs using tcx if supported by the kernel")
 	option.BindEnv(vp, option.EnableTCX)
@@ -642,10 +640,6 @@ func InitGlobalFlags(logger *slog.Logger, cmd *cobra.Command, vp *viper.Viper) {
 	flags.MarkHidden(option.FQDNRegexCompileLRUSize)
 	option.BindEnv(vp, option.FQDNRegexCompileLRUSize)
 
-	flags.String(option.ToFQDNsPreCache, defaults.ToFQDNsPreCache, "DNS cache data at this path is preloaded on agent startup")
-	flags.MarkDeprecated(option.ToFQDNsPreCache, "This option is obsolete and will be removed in v1.21")
-	option.BindEnv(vp, option.ToFQDNsPreCache)
-
 	flags.Int(option.DNSProxyConcurrencyLimit, 0, "Limit concurrency of DNS message processing")
 	option.BindEnv(vp, option.DNSProxyConcurrencyLimit)
 
@@ -722,10 +716,6 @@ func InitGlobalFlags(logger *slog.Logger, cmd *cobra.Command, vp *viper.Viper) {
 
 	flags.Bool(option.DisableExternalIPMitigation, false, "Disable ExternalIP mitigation (CVE-2020-8554, default false)")
 	option.BindEnv(vp, option.DisableExternalIPMitigation)
-
-	flags.Bool(option.BypassIPAvailabilityUponRestore, false, "Bypasses the IP availability error within IPAM upon endpoint restore")
-	flags.MarkHidden(option.BypassIPAvailabilityUponRestore)
-	option.BindEnv(vp, option.BypassIPAvailabilityUponRestore)
 
 	flags.Bool(option.EnableCiliumEndpointSlice, false, "Enable the CiliumEndpointSlice watcher in place of the CiliumEndpoint watcher (beta)")
 	option.BindEnv(vp, option.EnableCiliumEndpointSlice)
@@ -1033,12 +1023,12 @@ func initEnv(logger *slog.Logger, vp *viper.Viper) {
 	}
 
 	if option.Config.EnableRemoteNodeMasquerade && !option.Config.EnableBPFMasquerade {
-		logging.Fatal(logger, "Option "+option.EnableRemoteNodeMasquerade+" requires BPF masquerade to be enabled ("+option.EnableBPFMasquerade+")")
+		logger.Info(fmt.Sprintf("Option %s requires BPF masquerade (%s). Disabling", option.EnableRemoteNodeMasquerade, option.EnableBPFMasquerade))
+		option.Config.EnableRemoteNodeMasquerade = false
 	}
 
-	if option.Config.TunnelingEnabled() &&
-		option.Config.EnableAutoDirectRouting {
-		logging.Fatal(logger, fmt.Sprintf("%s requires native routing mode.", option.EnableAutoDirectRoutingName))
+	if !option.Config.RequiresNativeRouting() && option.Config.EnableAutoDirectRouting {
+		logging.Fatal(logger, fmt.Sprintf("%s requires native or hybrid routing mode.", option.EnableAutoDirectRoutingName))
 	}
 
 	initClockSourceOption(logger)
@@ -1093,31 +1083,6 @@ func initEnv(logger *slog.Logger, vp *viper.Viper) {
 		// only be an IPv4 CIDR at the moment.
 		if !option.Config.EnableIPv4 {
 			logging.Fatal(logger, fmt.Sprintf("%s requires IPv4 support.", option.InstallNoConntrackIptRules))
-		}
-	}
-
-	// Ensure that the user does not turn on this mode unless it's for an IPAM
-	// mode which support the bypass.
-	if option.Config.BypassIPAvailabilityUponRestore {
-		switch option.Config.IPAMMode() {
-		case ipamOption.IPAMENI, ipamOption.IPAMAzure:
-			logger.Info(
-				"Running with bypass of IP not available errors upon endpoint " +
-					"restore. Be advised that this mode is intended to be " +
-					"temporary to ease upgrades. Consider restarting the pods " +
-					"which have IPs not from the pool.",
-			)
-		default:
-			option.Config.BypassIPAvailabilityUponRestore = false
-			logger.Warn(
-				fmt.Sprintf(
-					"Bypassing IP allocation upon endpoint restore (%q) is enabled with"+
-						"unintended IPAM modes. This bypass is only intended "+
-						"to work for CRD-based IPAM modes such as ENI. Disabling "+
-						"bypass.",
-					option.BypassIPAvailabilityUponRestore,
-				),
-			)
 		}
 	}
 }

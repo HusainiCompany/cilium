@@ -31,12 +31,20 @@ type BPFHost struct {
 	EnableIPv6Fragments bool `config:"enable_ipv6_fragments"`
 	// Enable L2 Announcements.
 	EnableL2Announcements bool `config:"enable_l2_announcements"`
+	// Enable NAT46/NAT64 translation for NodePort services.
+	EnableNAT46X64 bool `config:"enable_nat_46x64"`
+	// Enable NAT46/NAT64 gateway for NodePort services.
+	EnableNAT46X64Gateway bool `config:"enable_nat_46x64_gateway"`
 	// Use netkit devices for pods.
 	EnableNetkit bool `config:"enable_netkit"`
 	// Enable routes when service has 0 endpoints.
 	EnableNoServiceEndpointsRoutable bool `config:"enable_no_service_endpoints_routable"`
 	// Maintain packet and byte counters for every policy entry.
 	EnablePolicyAccounting bool `config:"enable_policy_accounting"`
+	// Enable audit mode for policies.
+	EnablePolicyAuditMode bool `config:"enable_policy_audit_mode"`
+	// Enable policy verdict notifications.
+	EnablePolicyVerdictNotification bool `config:"enable_policy_verdict_notification"`
 	// Masquerade traffic to remote nodes.
 	EnableRemoteNodeMasquerade bool `config:"enable_remote_node_masquerade"`
 	// Reply with ICMP to traffic to a service with no backends.
@@ -64,6 +72,8 @@ type BPFHost struct {
 	NATIPv6Masquerade types.V6Addr `config:"nat_ipv6_masquerade"`
 	// Whether to redirect to the proxy via cilium_net (hairpin) or via stack.
 	ProxyRedirectViaCiliumNet bool `config:"proxy_redirect_via_cilium_net"`
+	// Number of times to retry SNAT.
+	SNATCollisionRetries uint16 `config:"snat_collision_retries"`
 	// The endpoint's security label.
 	SecurityLabel uint32 `config:"security_label"`
 	// Strict encryption mode drops all unencrypted pod-to-pod egress traffic.
@@ -86,11 +96,12 @@ type BPFHost struct {
 
 func NewBPFHost(node Node) *BPFHost {
 	return &BPFHost{false, 0x0, false, false, false, false, false, false, false, false,
-		false, false, false, false, false, 0x0, 0xe, 0x0, false, 0x0,
+		false, false, false, false, false, false, false, false, false,
+		0x0, 0xe, 0x0, false, 0x0,
 		cast[types.MACAddr]([]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}),
 		0x0, cast[types.V4Addr]([]byte{0x0, 0x0, 0x0, 0x0}),
 		cast[types.V6Addr]([]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}),
-		false, 0x0,
+		false, 0x20, 0x0,
 		cast[types.StrictEncryptionCfg]([]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}),
 		0x0, 0x0,
 		cast[types.VLANFilterConfig]([]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}),

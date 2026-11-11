@@ -59,13 +59,9 @@ struct ct_state {
 	__u32 backend_id;	/* Backend ID in lb4_backends */
 };
 
-static __always_inline bool ct_state_is_from_l7lb(const struct ct_state *ct_state __maybe_unused)
+static __always_inline bool ct_state_is_from_l7lb(const struct ct_state *ct_state)
 {
-#ifdef ENABLE_L7_LB
-	return ct_state->from_l7lb;
-#else
-	return false;
-#endif
+	return CONFIG(enable_l7_lb) && ct_state->from_l7lb;
 }
 
 struct ct_buffer4 {
@@ -329,7 +325,9 @@ ct_entry_matches_types(const struct ct_entry *entry __maybe_unused,
 	    entry->rev_nat_index == state->rev_nat_index)
 		return true;
 
-#ifdef ENABLE_NODEPORT
+	if (!NODEPORT_ENABLED)
+		return false;
+
 	if ((ct_entry_types & CT_ENTRY_NODEPORT) &&
 	    entry->node_port && entry->rev_nat_index) {
 		if (!state || !state->rev_nat_index)
@@ -340,11 +338,9 @@ ct_entry_matches_types(const struct ct_entry *entry __maybe_unused,
 			return true;
 	}
 
-# ifdef ENABLE_DSR
-	if ((ct_entry_types & CT_ENTRY_DSR) && entry->dsr_internal)
+	if (CONFIG(dsr_cfg).enable && (ct_entry_types & CT_ENTRY_DSR) &&
+	    entry->dsr_internal)
 		return true;
-# endif
-#endif
 
 	return false;
 }
@@ -1223,6 +1219,33 @@ ct_has_egress_entry6(const void *map, struct ipv6_ct_tuple *tuple)
 	tuple->flags = flags;
 
 	return entry;
+}
+
+/* Entries redirected to the L7 proxy do not count. */
+static __always_inline bool
+ct_has_live_ingress_entry4(const void *map, struct ipv4_ct_tuple *tuple)
+{
+	__u8 flags = tuple->flags;
+	const struct ct_entry *entry;
+
+	tuple->flags = TUPLE_F_IN;
+	entry = map_lookup_elem(map, tuple);
+	tuple->flags = flags;
+
+	return entry && ct_entry_alive(entry) && !entry->proxy_redirect;
+}
+
+static __always_inline bool
+ct_has_live_ingress_entry6(const void *map, struct ipv6_ct_tuple *tuple)
+{
+	__u8 flags = tuple->flags;
+	const struct ct_entry *entry;
+
+	tuple->flags = TUPLE_F_IN;
+	entry = map_lookup_elem(map, tuple);
+	tuple->flags = flags;
+
+	return entry && ct_entry_alive(entry) && !entry->proxy_redirect;
 }
 
 static __always_inline bool

@@ -6,19 +6,19 @@
 #include "pktgen.h"
 
 /* Enable code paths under test */
-#define ENABLE_IPV4
-#define ENABLE_IPV6
-#define ENABLE_SRV6
+#define ENABLE_IPV4 1
+#define ENABLE_IPV6 1
 #ifdef TUNNEL_MODE
 #undef TUNNEL_MODE
 #endif
 
-/* Test SRH encap. Reduced encap code path is a subset of SRH encap */
-#define ENABLE_SRV6_SRH_ENCAP
-
 #include "lib/bpf_lxc.h"
 #include "lib/ipcache.h"
 #include "lib/policy.h"
+
+ASSIGN_CONFIG(bool, enable_ipv4, true)
+/* Test SRH encap. Reduced encap code path is a subset of SRH encap */
+ASSIGN_CONFIG(struct srv6_config, srv6_cfg, {.enable = true, .enable_srh_encap = true})
 
 #define POD_IPV4 v4_pod_one
 #define EXT_IPV4 v4_ext_one

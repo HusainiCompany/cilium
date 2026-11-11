@@ -19,20 +19,16 @@ import (
 	"github.com/cilium/cilium/pkg/datapath/config"
 	dpdef "github.com/cilium/cilium/pkg/datapath/linux/config/defines"
 	"github.com/cilium/cilium/pkg/datapath/linux/sysctl"
+	"github.com/cilium/cilium/pkg/datapath/types"
 	"github.com/cilium/cilium/pkg/defaults"
 	endpoint "github.com/cilium/cilium/pkg/endpoint/types"
 	"github.com/cilium/cilium/pkg/kpr"
 	"github.com/cilium/cilium/pkg/loadbalancer"
 	lbmaps "github.com/cilium/cilium/pkg/loadbalancer/maps"
 	ipcachemap "github.com/cilium/cilium/pkg/maps/ipcache"
-	"github.com/cilium/cilium/pkg/maps/l2respondermap"
-	"github.com/cilium/cilium/pkg/maps/l2v6respondermap"
-	"github.com/cilium/cilium/pkg/maps/lxcmap"
 	"github.com/cilium/cilium/pkg/maps/metricsmap"
-	"github.com/cilium/cilium/pkg/maps/nat"
 	"github.com/cilium/cilium/pkg/maps/nodemap"
 	"github.com/cilium/cilium/pkg/maps/policymap"
-	"github.com/cilium/cilium/pkg/maps/vtep"
 	"github.com/cilium/cilium/pkg/node"
 	"github.com/cilium/cilium/pkg/option"
 )
@@ -43,6 +39,10 @@ type Writer interface {
 	// WriteNodeConfig writes the implementation-specific configuration of
 	// node-wide options into the specified writer.
 	WriteNodeConfig(io.Writer, *config.Config) error
+
+	// WriteNodeConfigForHash writes what WriteNodeConfig writes, minus the
+	// comment holding the node addresses.
+	WriteNodeConfigForHash(io.Writer, *config.Config) error
 
 	// WriteNetdevConfig writes the implementation-specific configuration
 	// of configurable options to the specified writer. Options specified
@@ -99,6 +99,15 @@ func writeIncludes(w io.Writer) (int, error) {
 // https://docs.cilium.io/en/latest/contributing/development/datapath_config
 // will guide you through adding new configuration.
 func (h *HeaderfileWriter) WriteNodeConfig(w io.Writer, cfg *config.Config) error {
+	return h.writeNodeConfig(w, cfg, true)
+}
+
+// WriteNodeConfigForHash writes node_config.h without the address comment, which no BPF program reads.
+func (h *HeaderfileWriter) WriteNodeConfigForHash(w io.Writer, cfg *config.Config) error {
+	return h.writeNodeConfig(w, cfg, false)
+}
+
+func (h *HeaderfileWriter) writeNodeConfig(w io.Writer, cfg *config.Config, withAddresses bool) error {
 	// --- WARNING: THIS CONFIGURATION METHOD IS DEPRECATED, SEE FUNCTION DOC ---
 
 	extraMacrosMap := make(dpdef.Map)
@@ -106,40 +115,38 @@ func (h *HeaderfileWriter) WriteNodeConfig(w io.Writer, cfg *config.Config) erro
 
 	fw := bufio.NewWriter(w)
 
-	writeIncludes(w)
+	writeIncludes(fw)
 
-	var ipv4NodePortAddrs, ipv6NodePortAddrs []netip.Addr
-	for _, addr := range cfg.NodeAddresses {
-		if !addr.NodePort {
-			continue
+	if withAddresses {
+		var ipv4NodePortAddrs, ipv6NodePortAddrs []netip.Addr
+		for _, addr := range cfg.NodeAddresses {
+			if !addr.NodePort {
+				continue
+			}
+			if addr.Addr.Is4() {
+				ipv4NodePortAddrs = append(ipv4NodePortAddrs, addr.Addr)
+			} else {
+				ipv6NodePortAddrs = append(ipv6NodePortAddrs, addr.Addr)
+			}
 		}
-		if addr.Addr.Is4() {
-			ipv4NodePortAddrs = append(ipv4NodePortAddrs, addr.Addr)
-		} else {
-			ipv6NodePortAddrs = append(ipv6NodePortAddrs, addr.Addr)
-		}
-	}
 
-	fmt.Fprintf(fw, "/*\n")
-	if option.Config.EnableIPv6 {
-		fmt.Fprintf(fw, " cilium.v6.external.str %s\n", cfg.NodeIPv6.String())
-		fmt.Fprintf(fw, " cilium.v6.internal.str %s\n", cfg.CiliumInternalIPv6.String())
-		fmt.Fprintf(fw, " cilium.v6.nodeport.str %v\n", ipv6NodePortAddrs)
+		fmt.Fprintf(fw, "/*\n")
+		if option.Config.EnableIPv6 {
+			fmt.Fprintf(fw, " cilium.v6.external.str %s\n", cfg.NodeIPv6.String())
+			fmt.Fprintf(fw, " cilium.v6.internal.str %s\n", cfg.CiliumInternalIPv6.String())
+			fmt.Fprintf(fw, " cilium.v6.nodeport.str %v\n", ipv6NodePortAddrs)
+			fmt.Fprintf(fw, "\n")
+		}
+		fmt.Fprintf(fw, " cilium.v4.external.str %s\n", cfg.NodeIPv4.String())
+		fmt.Fprintf(fw, " cilium.v4.internal.str %s\n", cfg.CiliumInternalIPv4.String())
+		fmt.Fprintf(fw, " cilium.v4.nodeport.str %v\n", ipv4NodePortAddrs)
 		fmt.Fprintf(fw, "\n")
+		if option.Config.EnableIPv6 {
+			fmt.Fprintf(fw, " %s%s\n", defaults.RestoreV6Addr, common.GoArray2C(cfg.CiliumInternalIPv6.AsSlice()))
+		}
+		fmt.Fprintf(fw, " %s%s\n", defaults.RestoreV4Addr, common.GoArray2C(cfg.CiliumInternalIPv4.AsSlice()))
+		fmt.Fprintf(fw, " */\n\n")
 	}
-	fmt.Fprintf(fw, " cilium.v4.external.str %s\n", cfg.NodeIPv4.String())
-	fmt.Fprintf(fw, " cilium.v4.internal.str %s\n", cfg.CiliumInternalIPv4.String())
-	fmt.Fprintf(fw, " cilium.v4.nodeport.str %v\n", ipv4NodePortAddrs)
-	fmt.Fprintf(fw, "\n")
-	if option.Config.EnableIPv6 {
-		fmt.Fprintf(fw, " %s%s\n", defaults.RestoreV6Addr, common.GoArray2C(cfg.CiliumInternalIPv6.AsSlice()))
-	}
-	fmt.Fprintf(fw, " %s%s\n", defaults.RestoreV4Addr, common.GoArray2C(cfg.CiliumInternalIPv4.AsSlice()))
-	fmt.Fprintf(fw, " */\n\n")
-
-	cDefinesMap["CILIUM_IPV6_FRAG_MAP_MAX_ENTRIES"] = fmt.Sprintf("%d", option.Config.FragmentsMapEntries)
-
-	cDefinesMap["CILIUM_IPV4_FRAG_MAP_MAX_ENTRIES"] = fmt.Sprintf("%d", option.Config.FragmentsMapEntries)
 
 	// --- WARNING: THIS CONFIGURATION METHOD IS DEPRECATED, SEE FUNCTION DOC ---
 
@@ -150,13 +157,10 @@ func (h *HeaderfileWriter) WriteNodeConfig(w io.Writer, cfg *config.Config) erro
 	cDefinesMap["CILIUM_LB_MAGLEV_MAP_MAX_ENTRIES"] = fmt.Sprintf("%d", cfg.LBConfig.LBMaglevMapEntries)
 	cDefinesMap["CILIUM_LB_SKIP_MAP_MAX_ENTRIES"] = fmt.Sprintf("%d", lbmaps.SkipLBMapMaxEntries)
 
-	cDefinesMap["ENDPOINTS_MAP_SIZE"] = fmt.Sprintf("%d", lxcmap.MaxEntries)
 	cDefinesMap["METRICS_MAP_SIZE"] = fmt.Sprintf("%d", metricsmap.MaxEntries)
 	cDefinesMap["IPCACHE_MAP_SIZE"] = fmt.Sprintf("%d", ipcachemap.MaxEntries)
 	cDefinesMap["NODE_MAP_SIZE"] = fmt.Sprintf("%d", h.nodeMap.Size())
 	cDefinesMap["POLICY_PROG_MAP_SIZE"] = fmt.Sprintf("%d", policymap.PolicyCallMaxEntries)
-	cDefinesMap["L2_RESPONDER_MAP4_SIZE"] = fmt.Sprintf("%d", l2respondermap.DefaultMaxEntries)
-	cDefinesMap["L2_RESPONDER_MAP6_SIZE"] = fmt.Sprintf("%d", l2v6respondermap.DefaultMaxEntries)
 	if option.Config.PreAllocateMaps {
 		cDefinesMap["PREALLOCATE_MAPS"] = "1"
 	}
@@ -177,73 +181,26 @@ func (h *HeaderfileWriter) WriteNodeConfig(w io.Writer, cfg *config.Config) erro
 		cDefinesMap["ENABLE_IPV6"] = "1"
 	}
 
-	if option.Config.EnableSRv6 {
-		cDefinesMap["ENABLE_SRV6"] = "1"
-		if option.Config.SRv6EncapMode != "reduced" {
-			cDefinesMap["ENABLE_SRV6_SRH_ENCAP"] = "1"
-		}
-	}
-
 	// --- WARNING: THIS CONFIGURATION METHOD IS DEPRECATED, SEE FUNCTION DOC ---
 
-	if option.Config.EnableEnvoyConfig {
-		cDefinesMap["ENABLE_L7_LB"] = "1"
+	// todo(ekoops): get rid of this once we are able to ship pre-compiled objects.
+	if !h.kprCfg.KubeProxyReplacement && !option.Config.EnableBPFMasquerade {
+		cDefinesMap["SKIP_NODEPORT_PROGS"] = "1"
 	}
-
-	if h.kprCfg.EnableSocketLB {
-		if option.Config.UnsafeDaemonConfigOption.BPFSocketLBHostnsOnly {
-			cDefinesMap["ENABLE_SOCKET_LB_HOST_ONLY"] = "1"
-		}
-		if option.Config.UnsafeDaemonConfigOption.EnableSocketLBPeer {
-			cDefinesMap["ENABLE_SOCKET_LB_PEER"] = "1"
-		}
-	}
-
-	cDefinesMap["NODEPORT_NEIGH6_SIZE"] = fmt.Sprintf("%d", option.Config.NeighMapEntriesGlobal)
-	cDefinesMap["NODEPORT_NEIGH4_SIZE"] = fmt.Sprintf("%d", option.Config.NeighMapEntriesGlobal)
 
 	if h.kprCfg.KubeProxyReplacement {
-		cDefinesMap["ENABLE_NODEPORT"] = "1"
-
-		if option.Config.EnableNat46X64Gateway {
-			cDefinesMap["ENABLE_NAT_46X64_GATEWAY"] = "1"
-		}
-		if option.Config.NodePortNat46X64 {
-			cDefinesMap["ENABLE_NAT_46X64"] = "1"
-		}
-
 		// --- WARNING: THIS CONFIGURATION METHOD IS DEPRECATED, SEE FUNCTION DOC ---
 
-		const (
-			dsrEncapInv = iota
-			dsrEncapNone
-			dsrEncapIPIP
-			dsrEncapGeneve
-		)
-		cDefinesMap["DSR_ENCAP_IPIP"] = fmt.Sprintf("%d", dsrEncapIPIP)
-		cDefinesMap["DSR_ENCAP_GENEVE"] = fmt.Sprintf("%d", dsrEncapGeneve)
-		cDefinesMap["DSR_ENCAP_NONE"] = fmt.Sprintf("%d", dsrEncapNone)
 		if cfg.LBConfig.LoadBalancerUsesDSR() {
-			cDefinesMap["ENABLE_DSR"] = "1"
-			if option.Config.EnablePMTUDiscovery {
-				cDefinesMap["ENABLE_DSR_ICMP_ERRORS"] = "1"
-			}
-			if cfg.LBConfig.LBMode == loadbalancer.LBModeHybrid || cfg.LBConfig.LBModeAnnotation {
-				cDefinesMap["ENABLE_DSR_BYUSER"] = "1"
-			}
 			if cfg.LBConfig.DSRDispatch == loadbalancer.DSRDispatchOption {
-				cDefinesMap["DSR_ENCAP_MODE"] = fmt.Sprintf("%d", dsrEncapNone)
+				cDefinesMap["DSR_ENCAP_MODE"] = fmt.Sprintf("%d", types.DSREncapModeDSREncapModeNone)
 			} else if cfg.LBConfig.DSRDispatch == loadbalancer.DSRDispatchIPIP {
-				cDefinesMap["DSR_ENCAP_MODE"] = fmt.Sprintf("%d", dsrEncapIPIP)
+				cDefinesMap["DSR_ENCAP_MODE"] = fmt.Sprintf("%d", types.DSREncapModeDSREncapModeIPIP)
 			} else if cfg.LBConfig.DSRDispatch == loadbalancer.DSRDispatchGeneve {
-				cDefinesMap["DSR_ENCAP_MODE"] = fmt.Sprintf("%d", dsrEncapGeneve)
+				cDefinesMap["DSR_ENCAP_MODE"] = fmt.Sprintf("%d", types.DSREncapModeDSREncapModeGeneve)
 			}
 		} else {
-			cDefinesMap["DSR_ENCAP_MODE"] = fmt.Sprintf("%d", dsrEncapInv)
-		}
-
-		if option.Config.NodePortAcceleration != option.NodePortAccelerationDisabled {
-			cDefinesMap["ENABLE_NODEPORT_ACCELERATION"] = "1"
+			cDefinesMap["DSR_ENCAP_MODE"] = fmt.Sprintf("%d", types.DSREncapModeDSREncapModeInvalid)
 		}
 	}
 
@@ -258,40 +215,13 @@ func (h *HeaderfileWriter) WriteNodeConfig(w io.Writer, cfg *config.Config) erro
 
 	// --- WARNING: THIS CONFIGURATION METHOD IS DEPRECATED, SEE FUNCTION DOC ---
 
-	if option.Config.EnableHostFirewall {
-		cDefinesMap["ENABLE_HOST_FIREWALL"] = "1"
-	}
-
 	cDefinesMap["SNAT_MAPPING_IPV4_SIZE"] = fmt.Sprintf("%d", option.Config.NATMapEntriesGlobal)
 	cDefinesMap["SNAT_MAPPING_IPV6_SIZE"] = fmt.Sprintf("%d", option.Config.NATMapEntriesGlobal)
-	cDefinesMap["SNAT_COLLISION_RETRIES"] = fmt.Sprintf("%d", nat.SnatCollisionRetries)
-
-	if option.Config.EnableBPFMasquerade {
-		cDefinesMap["ENABLE_NODEPORT"] = "1"
-
-		if option.Config.EnableIPv4Masquerade {
-			cDefinesMap["ENABLE_MASQUERADE_IPV4"] = "1"
-
-			// ip-masq-agent depends on bpf-masq
-			if option.Config.EnableIPMasqAgent {
-				cDefinesMap["ENABLE_IP_MASQ_AGENT_IPV4"] = "1"
-			}
-		}
-		if option.Config.EnableIPv6Masquerade {
-			cDefinesMap["ENABLE_MASQUERADE_IPV6"] = "1"
-
-			if option.Config.EnableIPMasqAgent {
-				cDefinesMap["ENABLE_IP_MASQ_AGENT_IPV6"] = "1"
-			}
-		}
-	}
 
 	// --- WARNING: THIS CONFIGURATION METHOD IS DEPRECATED, SEE FUNCTION DOC ---
 
 	fmt.Fprintf(fw, "#define CT_MAP_SIZE_TCP %d\n", cmp.Or(option.Config.CTMapEntriesGlobalTCP, option.CTMapEntriesGlobalTCPDefault))
 	fmt.Fprintf(fw, "#define CT_MAP_SIZE_ANY %d\n", cmp.Or(option.Config.CTMapEntriesGlobalAny, option.CTMapEntriesGlobalAnyDefault))
-
-	cDefinesMap["VTEP_MAP_SIZE"] = fmt.Sprintf("%d", vtep.MaxEntries)
 
 	if option.Config.TunnelingEnabled() {
 		cDefinesMap["TUNNEL_MODE"] = "1"
@@ -358,22 +288,13 @@ func (h *HeaderfileWriter) WriteEndpointConfig(w io.Writer, e endpoint.Config) e
 	fw := bufio.NewWriter(w)
 
 	writeIncludes(w)
-
-	return h.writeTemplateConfig(fw, e)
-}
-
-func (h *HeaderfileWriter) writeTemplateConfig(fw *bufio.Writer, e endpoint.Config) error {
-	if e.RequireRouting() {
-		fmt.Fprintf(fw, "#define ENABLE_ROUTING 1\n")
-	}
-
 	h.writeNetdevConfig(fw, e.GetOptions())
-
 	return fw.Flush()
 }
 
 // WriteTemplateConfig writes the BPF configuration for the template to a writer.
 func (h *HeaderfileWriter) WriteTemplateConfig(w io.Writer, e endpoint.Config) error {
 	fw := bufio.NewWriter(w)
-	return h.writeTemplateConfig(fw, e)
+	h.writeNetdevConfig(fw, e.GetOptions())
+	return fw.Flush()
 }

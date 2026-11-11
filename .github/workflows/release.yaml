@@ -32,16 +32,10 @@ on:
         required: true
       CILIUM_RELEASE_BOT_APP_ID:
         required: true
-      QUAY_USERNAME_HELM_RELEASE_USERNAME:
-        required: false
-      QUAY_PASSWORD_HELM_RELEASE_PASSWORD:
-        required: false
 
 permissions:
   # To be able to access the repository with `actions/checkout`
   contents: read
-  # Required to generate OIDC tokens for `sigstore/cosign-installer` authentication
-  id-token: write
 
 concurrency:
   group: ${{ github.workflow }}-${{ inputs.version }}-${{ inputs.step }}
@@ -55,13 +49,13 @@ jobs:
       name: release-tool
       deployment: false
     timeout-minutes: 40
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Install Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # renovate: datasource=golang-version depName=go
-          go-version: 1.27.1
+          go-version: 1.27.3
 
       - name: Get token
         id: get_token
@@ -122,17 +116,21 @@ jobs:
   release-helm:
     name: Release Helm
     if: ${{ inputs.step == '5-publish-helm' }}
+    permissions:
+      contents: read
+      # Required to generate OIDC tokens for `sigstore/cosign-installer` authentication
+      id-token: write
     environment:
       name: release-helm
       deployment: false
-    timeout-minutes: 40
-    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    runs-on: ubuntu-26.04
     steps:
       - name: Install Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # renovate: datasource=golang-version depName=go
-          go-version: 1.27.1
+          go-version: 1.27.3
 
       - name: Install helm
         shell: bash
@@ -201,14 +199,44 @@ jobs:
           git config user.email "noreply@cilium.io"
           git remote set-url origin https://x-access-token:${{ steps.get_token.outputs.app_token }}@github.com/${{ github.repository }}.git
 
+      # Quay's registry endpoint only accepts credentials or a JWT signed by
+      # Quay itself, so the GitHub OIDC token cannot be used as the registry
+      # password directly. Trade it for a short lived robot token first.
+      #
+      # Because the job references an environment, the subject of the token is
+      # repo:cilium@21054566/cilium@48109239:environment:release-helm, the
+      # immutable form that carries the owner and repository ids. That is the
+      # identity federated with the robot account on the Quay side, so renaming
+      # the environment breaks the login.
+      - name: Get a quay.io robot token via OIDC
+        id: registry-token
+        env:
+          ROBOT: ${{ vars.QUAY_ROBOT_HELM }}
+        run: |
+          oidc_token="$(curl -sSf --retry 3 --retry-all-errors \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=quay.io" \
+            | jq -er '.value')"
+          echo "::add-mask::${oidc_token}"
+
+          # Pass the credentials on stdin so that the OIDC token is not visible
+          # in the process list of the runner.
+          robot_token="$(printf 'user = "%s:%s"\n' "${ROBOT}" "${oidc_token}" \
+            | curl -sSf --retry 3 --retry-all-errors -K - \
+              "https://quay.io/oauth2/federation/robot/token" \
+            | jq -er '.token')"
+          echo "::add-mask::${robot_token}"
+
+          echo "token=${robot_token}" >> "$GITHUB_OUTPUT"
+
       - name: Login to Helm registries
         shell: bash
         env:
-          QUAY_USERNAME: ${{ secrets.QUAY_USERNAME_HELM_RELEASE_USERNAME }}
-          QUAY_PASSWORD: ${{ secrets.QUAY_PASSWORD_HELM_RELEASE_PASSWORD }}
+          ROBOT: ${{ vars.QUAY_ROBOT_HELM }}
+          ROBOT_TOKEN: ${{ steps.registry-token.outputs.token }}
         run: |
           echo "Logging into Quay.io..."
-          echo "${QUAY_PASSWORD}" | helm registry login quay.io --username "${QUAY_USERNAME}" --password-stdin
+          echo "${ROBOT_TOKEN}" | helm registry login quay.io --username "${ROBOT}" --password-stdin
 
       - name: Run release tool
         shell: bash
@@ -245,7 +273,8 @@ jobs:
           PR_NUMBER=""
 
           while [ $WAIT_TIME -lt $MAX_WAIT ]; do
-            PR_NUMBER=$(gh pr list --repo cilium/charts --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+            PR_NUMBER=$(gh pr list --repo cilium/charts --head "$BRANCH" --state open --json number,headRepositoryOwner \
+              --jq '[.[] | select(.headRepositoryOwner.login == "cilium")][0].number // empty')
             if [ -n "$PR_NUMBER" ]; then
               echo "Found PR #$PR_NUMBER"
               break
@@ -262,72 +291,93 @@ jobs:
             exit 1
           fi
 
+          # Only the Cilium chart workflow validates the chart that this job releases.
+          wait_for_chart_checks() {
+            local head_sha=$1 run_id="" wait_time=0
+            echo "⏳ Waiting for the Cilium chart checks of $head_sha..."
+            while [ $wait_time -lt $MAX_WAIT ]; do
+              run_id=$(gh api -X GET repos/cilium/charts/actions/workflows/validate-cilium-chart.yaml/runs \
+                -f head_sha="$head_sha" -f event=pull_request -f branch="$BRANCH" \
+                --jq '[.workflow_runs[] | select(.head_repository.full_name == "cilium/charts")][0].id // empty')
+              if [ -n "$run_id" ]; then
+                break
+              fi
+              sleep 10
+              wait_time=$((wait_time + 10))
+            done
+            if [ -z "$run_id" ]; then
+              echo "❌ No Cilium chart checks found for $head_sha after waiting $MAX_WAIT seconds"
+              return 1
+            fi
+            until gh run watch "$run_id" --repo cilium/charts --exit-status --compact --interval 10; do
+              case "$(gh run view "$run_id" --repo cilium/charts --json status,conclusion --jq '.status + "/" + .conclusion')" in
+                completed/success) return 0 ;;
+                completed/*)
+                  echo "❌ Cilium chart checks failed: https://github.com/cilium/charts/actions/runs/$run_id"
+                  return 1 ;;
+              esac
+              sleep 10
+            done
+          }
+
+          repush_chart() {
+            echo "🔄 Re-running release tool to update PR..."
+
+            # Reset the charts directory by removing any files
+            # This is a workaround due to left overs made by the generate_helm_release.sh script
+            echo "🧹 Resetting ../charts directory..."
+            cd ../charts
+            git reset --hard "$(git symbolic-ref refs/remotes/origin/HEAD)"
+            git clean -fdx
+            cd -
+
+            # Re-run the release tool
+            cd ../release
+            ./release start \
+              --force \
+              --release-tool-dir "$(pwd)" \
+              --charts-repo-dir "$(pwd)/../charts" \
+              --repo-dir "$(pwd)/../cilium" \
+              --repo ${{ github.repository }} \
+              --target-version $VERSION \
+              --steps ${{ inputs.step }} \
+              --exclude-labels "cilium-cli-exclusive"
+            cd -
+          }
+
           echo "Merging PR #$PR_NUMBER..."
-          MERGE_ATTEMPTS=0
-          MAX_MERGE_ATTEMPTS=3
+          CHECK_FAILURES=0
+          MERGE_FAILURES=0
+          MAX_FAILURES=3
           MERGE_SUCCESS=false
 
-          while [ $MERGE_ATTEMPTS -lt $MAX_MERGE_ATTEMPTS ]; do
-            MERGE_ATTEMPTS=$((MERGE_ATTEMPTS + 1))
-            echo "🔄 Attempt $MERGE_ATTEMPTS of $MAX_MERGE_ATTEMPTS"
-
-            # Wait for checks to complete
-            echo "⏳ Waiting for PR checks to complete..."
-            sleep 30  # Initial wait to allow checks to start
-            if ! gh pr checks $PR_NUMBER --repo cilium/charts --fail-fast --required --watch; then
-              echo "❌ PR #$PR_NUMBER has failed checks on attempt $MERGE_ATTEMPTS"
-              echo "📋 Failed workflow details:"
-              gh pr checks $PR_NUMBER --repo cilium/charts --json name,state,link | jq -r '.[] | select(.state == "FAILURE") | "  - \(.name): \(.state) (\(.link // "No URL"))"'
-              if [ $MERGE_ATTEMPTS -lt $MAX_MERGE_ATTEMPTS ]; then
-                echo "⚠️ Retrying..."
-                continue
-              else
-                exit 1
-              fi
+          while [ $CHECK_FAILURES -lt $MAX_FAILURES ] && [ $MERGE_FAILURES -lt $MAX_FAILURES ]; do
+            if [ $((CHECK_FAILURES + MERGE_FAILURES)) -gt 0 ]; then
+              repush_chart
             fi
 
-            echo "✅ All required checks passed for PR #$PR_NUMBER"
+            HEAD_SHA=$(git -C ../charts rev-parse HEAD)
+            if ! wait_for_chart_checks "$HEAD_SHA"; then
+              CHECK_FAILURES=$((CHECK_FAILURES + 1))
+              echo "❌ PR #$PR_NUMBER failed the Cilium chart checks ($CHECK_FAILURES of $MAX_FAILURES)"
+              continue
+            fi
+
+            echo "✅ Cilium chart checks passed for PR #$PR_NUMBER"
 
             # Attempt to merge
             echo "Merging PR #$PR_NUMBER..."
-            if gh pr merge $PR_NUMBER --repo cilium/charts --rebase --delete-branch; then
+            if gh pr merge $PR_NUMBER --repo cilium/charts --rebase --delete-branch --match-head-commit "$HEAD_SHA"; then
               echo "✅ Successfully merged PR #$PR_NUMBER"
               MERGE_SUCCESS=true
               break
-            else
-              echo "⚠️ Merge attempt $MERGE_ATTEMPTS failed"
-              if [ $MERGE_ATTEMPTS -lt $MAX_MERGE_ATTEMPTS ]; then
-                echo "🔄 Re-running release tool to update PR..."
-
-                # Reset the charts directory by removing any files
-                # This is a workaround due to left overs made by the generate_helm_release.sh script
-                echo "🧹 Resetting ../charts directory..."
-                cd ../charts
-                git reset --hard "$(git symbolic-ref refs/remotes/origin/HEAD)"
-                git clean -fdx
-                cd -
-
-                # Re-run the release tool (step from line 127)
-                cd ../release
-                ./release start \
-                  --force \
-                  --release-tool-dir "$(pwd)" \
-                  --charts-repo-dir "$(pwd)/../charts" \
-                  --repo-dir "$(pwd)/../cilium" \
-                  --repo ${{ github.repository }} \
-                  --target-version $VERSION \
-                  --steps ${{ inputs.step }} \
-                  --exclude-labels "cilium-cli-exclusive"
-                cd -
-              else
-                echo "❌ Failed to merge PR #$PR_NUMBER after $MAX_MERGE_ATTEMPTS attempts"
-                exit 1
-              fi
             fi
+            MERGE_FAILURES=$((MERGE_FAILURES + 1))
+            echo "⚠️ Merge of PR #$PR_NUMBER failed ($MERGE_FAILURES of $MAX_FAILURES)"
           done
 
           if [ "$MERGE_SUCCESS" = false ]; then
-            echo "❌ Failed to merge PR #$PR_NUMBER after $MAX_MERGE_ATTEMPTS attempts"
+            echo "❌ Failed to merge PR #$PR_NUMBER after $CHECK_FAILURES failed chart runs and $MERGE_FAILURES failed merges"
             exit 1
           fi
 
@@ -355,12 +405,36 @@ jobs:
           echo "quay_digest=${QUAY_DIGEST}" >> $GITHUB_OUTPUT
           echo "✅ Quay.io digest: ${QUAY_DIGEST}"
 
+      # Waiting for the chart pull request to merge above takes tens of minutes,
+      # which outlives the token minted for the helm login, so cosign gets one
+      # of its own. The subject is the same as above.
+      - name: Get a fresh quay.io robot token via OIDC
+        id: signing-token
+        env:
+          ROBOT: ${{ vars.QUAY_ROBOT_HELM }}
+        run: |
+          oidc_token="$(curl -sSf --retry 3 --retry-all-errors \
+            -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=quay.io" \
+            | jq -er '.value')"
+          echo "::add-mask::${oidc_token}"
+
+          # Pass the credentials on stdin so that the OIDC token is not visible
+          # in the process list of the runner.
+          robot_token="$(printf 'user = "%s:%s"\n' "${ROBOT}" "${oidc_token}" \
+            | curl -sSf --retry 3 --retry-all-errors -K - \
+              "https://quay.io/oauth2/federation/robot/token" \
+            | jq -er '.token')"
+          echo "::add-mask::${robot_token}"
+
+          echo "token=${robot_token}" >> "$GITHUB_OUTPUT"
+
       - name: Sign quay.io OCI helm chart
         uses: ./.github/actions/cosign
         with:
           image: "quay.io/${{ github.repository_owner }}/charts/cilium@${{ steps.helm_digests.outputs.quay_digest }}"
           generate_sbom: 'false'
           attach_sbom: 'false'
-          registry_username: ${{ secrets.QUAY_USERNAME_HELM_RELEASE_USERNAME }}
-          registry_password: ${{ secrets.QUAY_PASSWORD_HELM_RELEASE_PASSWORD }}
+          registry_username: ${{ vars.QUAY_ROBOT_HELM }}
+          registry_password: ${{ steps.signing-token.outputs.token }}
           registry_url: 'quay.io'

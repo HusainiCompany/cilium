@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/aliyun/alibaba-cloud-sdk-go/sdk"
+	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/auth/credentials"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/vpc"
 
@@ -31,6 +33,7 @@ var subsysLogAttr = []any{logfields.LogSubsys, "ipam-allocator-alibaba-cloud"}
 type AllocatorAlibabaCloud struct {
 	AlibabaCloudVPCID            string
 	AlibabaCloudReleaseExcessIPs bool
+	ExcessIPReleaseDelay         int
 	ParallelAllocWorkers         int64
 	LimitIPAMAPIBurst            int
 	LimitIPAMAPIQPS              float64
@@ -41,7 +44,11 @@ type AllocatorAlibabaCloud struct {
 	client     *api.Client
 }
 
-// Init sets up ENI limits based on given options
+// Init sets up ENI limits based on given options.
+//
+// The VPC and ECS clients use the SDK's default credential chain, which
+// supports static AccessKeys (env/secret), ECS instance RAM roles (IMDS) and
+// RRSA/OIDC (RAM Roles for Service Accounts) via AssumeRoleWithOIDC.
 // Credential ref https://github.com/aliyun/alibaba-cloud-sdk-go/blob/master/docs/2-Client-EN.md
 func (a *AllocatorAlibabaCloud) Init(ctx context.Context, logger *slog.Logger) error {
 	a.rootLogger = logger
@@ -57,11 +64,13 @@ func (a *AllocatorAlibabaCloud) Init(ctx context.Context, logger *slog.Logger) e
 		return err
 	}
 
-	vpcClient, err := vpc.NewClientWithProvider(regionID)
+	vpcClient, err := vpc.NewClientWithOptions(regionID,
+		sdk.NewConfig().WithScheme("HTTPS"), credentials.NewDefaultCredentialsProvider())
 	if err != nil {
 		return err
 	}
-	ecsClient, err := ecs.NewClientWithProvider(regionID)
+	ecsClient, err := ecs.NewClientWithOptions(regionID,
+		sdk.NewConfig().WithScheme("HTTPS"), credentials.NewDefaultCredentialsProvider())
 	if err != nil {
 		return err
 	}
@@ -73,9 +82,6 @@ func (a *AllocatorAlibabaCloud) Init(ctx context.Context, logger *slog.Logger) e
 	// ref https://github.com/aliyun/alibaba-cloud-sdk-go/blob/master/docs/11-Endpoint-EN.md
 	vpcClient.Network = "vpc"
 	ecsClient.Network = "vpc"
-
-	vpcClient.GetConfig().WithScheme("HTTPS")
-	ecsClient.GetConfig().WithScheme("HTTPS")
 
 	a.client = api.NewClient(a.rootLogger, vpcClient, ecsClient, a.AlibabaMetrics, a.LimitIPAMAPIQPS,
 		a.LimitIPAMAPIBurst, operatorOption.Config.IPAMInstanceTags)
@@ -95,7 +101,7 @@ func (a *AllocatorAlibabaCloud) Start(ctx context.Context, getterUpdater allocat
 
 	instances := ipam.NewInstancesManager(a.rootLogger, a.client)
 	nodeManager, err := nodemanager.NewNodeManager(a.logger, instances, getterUpdater, iMetrics,
-		a.ParallelAllocWorkers, a.AlibabaCloudReleaseExcessIPs, 0, false)
+		a.ParallelAllocWorkers, a.AlibabaCloudReleaseExcessIPs, a.ExcessIPReleaseDelay, false)
 	if err != nil {
 		return nil, fmt.Errorf("unable to initialize AlibabaCloud node manager: %w", err)
 	}

@@ -269,12 +269,12 @@ spec:
           protocol: TCP
         {{- end }}
         {{- if .Values.prometheus.enabled }}
-        - name: prometheus
+        - name: {{ .Values.prometheus.portName | quote }}
           containerPort: {{ .Values.prometheus.port }}
           hostPort: {{ .Values.prometheus.port }}
           protocol: TCP
         {{- if and .Values.envoy.prometheus.enabled (not $envoyDS) }}
-        - name: envoy-metrics
+        - name: {{ .Values.envoy.prometheus.portName | quote }}
           containerPort: {{ .Values.envoy.prometheus.port }}
           hostPort: {{ .Values.envoy.prometheus.port }}
           protocol: TCP
@@ -287,7 +287,7 @@ spec:
         {{- end }}
         {{- end }}
         {{- if or .Values.hubble.metrics.enabled .Values.hubble.metrics.dynamic.enabled }}
-        - name: hubble-metrics
+        - name: {{ .Values.hubble.metrics.portName | quote }}
           containerPort: {{ .Values.hubble.metrics.port }}
           hostPort: {{ .Values.hubble.metrics.port }}
           protocol: TCP
@@ -310,9 +310,9 @@ spec:
           {{- end }}
         terminationMessagePolicy: FallbackToLogsOnError
         volumeMounts:
-        {{- if .Values.authentication.mutual.spire.enabled }}
+        {{- if eq (include "ztunnelSpireEnabled" .) "true" }}
         - name: spire-agent-socket
-          mountPath: {{ dir .Values.authentication.mutual.spire.adminSocketPath }}
+          mountPath: {{ dir .Values.encryption.ztunnel.spire.adminSocketPath }}
           readOnly: false
         {{- end }}
         {{- if $envoyDS }}
@@ -420,6 +420,8 @@ spec:
           mountPath: /var/lib/kubelet/plugins
         - name: plugin-registry
           mountPath: /var/lib/kubelet/plugins_registry
+        - name: cdi-specs
+          mountPath: /var/run/cdi
         - name: nri-plugin
           mountPath: /var/run/nri
         - name: host-sys-bus-pci-devices
@@ -933,10 +935,10 @@ spec:
         hostPath:
           path: /run/xtables.lock
           type: FileOrCreate
-      {{- if .Values.authentication.mutual.spire.enabled }}
+      {{- if eq (include "ztunnelSpireEnabled" .) "true" }}
       - name: spire-agent-socket
         hostPath:
-          path: {{ dir .Values.authentication.mutual.spire.adminSocketPath }}
+          path: {{ dir .Values.encryption.ztunnel.spire.adminSocketPath }}
           type: DirectoryOrCreate
       {{- end }}
       {{- if $envoyDS }}
@@ -1086,6 +1088,10 @@ spec:
         hostPath:
           path: /var/lib/kubelet/plugins_registry
           type: Directory
+      - name: cdi-specs
+        hostPath:
+          path: /var/run/cdi
+          type: DirectoryOrCreate
       - name: nri-plugin
         hostPath:
           path: /var/run/nri

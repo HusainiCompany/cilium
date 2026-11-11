@@ -7,6 +7,7 @@
 #include <bpf/api.h>
 
 #include "common.h"
+#include "config.h"
 #include "encrypt.h"
 #include "overloadable.h"
 #include "identity.h"
@@ -17,8 +18,6 @@
 
 DECLARE_CONFIG(__u32, wg_ifindex, "Index of the WireGuard interface.")
 DECLARE_CONFIG(__u16, wg_port, "Port for the WireGuard interface.")
-
-#ifdef ENABLE_WIREGUARD
 
 /* ctx_is_wireguard is used to check whether ctx is a WireGuard network packet.
  * This function returns true in case all the following conditions are satisfied:
@@ -67,19 +66,19 @@ wg_maybe_redirect_to_encrypt(struct __ctx_buff *ctx, __be16 proto,
 			     __u32 src_sec_identity)
 {
 	const struct remote_endpoint_info *dst = NULL;
-	const struct remote_endpoint_info __maybe_unused *src = NULL;
+	const struct remote_endpoint_info *src = NULL;
 	void *data, *data_end;
 	struct ipv6hdr __maybe_unused *ip6;
-	struct iphdr __maybe_unused *ip4;
+	struct iphdr *ip4;
 	__u32 magic __maybe_unused = 0;
 
-# if defined(HAVE_ENCAP)
+	if (HAVE_ENCAP) {
 		/* In tunneling mode WG needs to encrypt tunnel traffic,
 		 * so that src sec ID can be transferred.
 		 */
 		if (ctx_is_overlay(ctx))
 			goto overlay_encrypt;
-# endif /* HAVE_ENCAP */
+	}
 
 	if (!eth_is_supported_ethertype(proto))
 		return DROP_UNSUPPORTED_L2;
@@ -119,8 +118,10 @@ wg_maybe_redirect_to_encrypt(struct __ctx_buff *ctx, __be16 proto,
 		}
 		break;
 #endif
-#ifdef ENABLE_IPV4
 	case bpf_htons(ETH_P_IP):
+		if (!is_defined(ENABLE_IPV4))
+			goto out;
+
 		if (!revalidate_data(ctx, &data, &data_end, &ip4))
 			return DROP_INVALID;
 
@@ -134,7 +135,6 @@ wg_maybe_redirect_to_encrypt(struct __ctx_buff *ctx, __be16 proto,
 			src_sec_identity = src->sec_identity;
 		}
 		break;
-#endif
 	default:
 		goto out;
 	}
@@ -168,4 +168,3 @@ overlay_encrypt: __maybe_unused
 out:
 	return CTX_ACT_OK;
 }
-#endif /* ENABLE_WIREGUARD */

@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 /* Copyright Authors of Cilium */
 
-#define ENABLE_IPV4
-#define ENABLE_IPV6
-#define ENABLE_WIREGUARD 1
-#define TUNNEL_MODE
+#define ENABLE_IPV4 1
+#define ENABLE_IPV6 1
+#define TUNNEL_MODE 1
 #define ENCAP_IFINDEX 4
 #define DEST_IFINDEX 5
 #define DEST_LXC_ID 0
@@ -64,8 +63,10 @@ static volatile const __u8 *DEST_NODE_MAC = mac_four;
 
 #include "lib/bpf_overlay.h"
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
 ASSIGN_CONFIG(bool, enable_identity_mark, true)
 ASSIGN_CONFIG(bool, encryption_strict_ingress, true)
+ASSIGN_CONFIG(bool, enable_wireguard, true)
 
 #include "lib/endpoint.h"
 

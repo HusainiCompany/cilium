@@ -9,11 +9,6 @@
 #define ENABLE_IPV4			1
 #define ENABLE_IPV6			1
 
-#define ENABLE_MASQUERADE_IPV4		1
-#define ENABLE_MASQUERADE_IPV6		1
-
-#define ENABLE_NODEPORT			1
-
 #define NODE_IP				v4_node_one
 #define NODE_IP_V6			v6_node_one
 #define NODE_PORT			bpf_htons(50000)
@@ -32,8 +27,12 @@ static volatile const __u8 *server_mac = mac_two;
 
 ASSIGN_CONFIG(union v4addr, nat_ipv4_masquerade, { .be32 = NODE_IP})
 ASSIGN_CONFIG(union v6addr, nat_ipv6_masquerade, { .addr = v6_node_one_addr})
+ASSIGN_CONFIG(bool, enable_masquerade_ipv6, true)
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
 ASSIGN_CONFIG(bool, enable_conntrack_accounting, true)
+ASSIGN_CONFIG(bool, enable_masquerade_ipv4, true)
+ASSIGN_CONFIG(bool, enable_nodeport, true)
 
 #include "lib/endpoint.h"
 #include "lib/ipcache.h"

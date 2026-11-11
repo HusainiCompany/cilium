@@ -4,13 +4,17 @@
 #pragma once
 
 #include "common.h"
+#include "config.h"
 #include "dbg.h"
 #include "eps.h"
 #include "hash.h"
 #include "trace.h"
 #include "vtep.h"
 
-#ifdef HAVE_ENCAP
+#ifndef ENCAP_IFINDEX
+#define ENCAP_IFINDEX 0
+#endif
+
 static __always_inline int
 __encap_with_nodeid(struct __ctx_buff *ctx, __u32 src_ip, __be16 src_port,
 		    const struct remote_endpoint_info *info, __u32 seclabel,
@@ -113,25 +117,22 @@ tunnel_gen_src_port_v6(struct ipv6_ct_tuple *tuple __maybe_unused)
 #endif
 }
 
-# if defined(ENABLE_IPV4) || defined(ENABLE_IPV6)
 static __always_inline int
 get_tunnel_key(struct __ctx_buff *ctx, struct bpf_tunnel_key *key)
 {
-	__u32 key_size __maybe_unused = TUNNEL_KEY_WITHOUT_SRC_IP;
-	int ret __maybe_unused;
+	__u32 key_size = TUNNEL_KEY_WITHOUT_SRC_IP;
+	int ret;
 
-#  ifdef ENABLE_IPV4
-	ret = ctx_get_tunnel_key(ctx, key, key_size, 0);
-	if (!ret)
-		return ret;
-#  endif /* ENABLE_IPV4 */
-#  ifdef ENABLE_IPV6
-	ret = ctx_get_tunnel_key(ctx, key, key_size, BPF_F_TUNINFO_IPV6);
-	if (!ret)
-		return ret;
-#  endif /* ENABLE_IPV6 */
+	if (is_defined(ENABLE_IPV4)) {
+		ret = ctx_get_tunnel_key(ctx, key, key_size, 0);
+		if (!ret)
+			return ret;
+	}
+	if (is_defined(ENABLE_IPV6)) {
+		ret = ctx_get_tunnel_key(ctx, key, key_size, BPF_F_TUNINFO_IPV6);
+		if (!ret)
+			return ret;
+	}
 
 	return DROP_NO_TUNNEL_KEY;
 }
-# endif /* ENABLE_IPV4 || ENABLE_IPV6 */
-#endif /* HAVE_ENCAP */

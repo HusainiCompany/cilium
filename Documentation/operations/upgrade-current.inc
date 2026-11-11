@@ -41,6 +41,13 @@ notes carefully below to understand what to do during upgrade.
   
   Please backup your ``TLSRoute`` resources and ensure that Gateway API is upgraded to v1.6.1 before
   upgrading Cilium to v1.20. See :ref:`gs_gateway_api` for installation instructions.
+* In Cilium v1.20.0 - v1.20.4, ``--use-cilium-internal-ip-for-ipsec`` was silently
+  ignored with IPsec encryption, so nodes used the Kubernetes ``InternalIP``
+  instead of the ``CiliumInternalIP``. The flag is honored again from
+  v1.20.5. If you set it, make sure ESP traffic is allowed between the
+  ``CiliumInternalIP`` addresses of your nodes, or connectivity may break
+  when upgrading from an affected version. Consider an IPsec key rotation
+  afterwards to clean up stale XFRM states.
 
 Informational Notes
 ~~~~~~~~~~~~~~~~~~~
@@ -115,6 +122,10 @@ The following options have been introduced in this version of Cilium:
   side effect of splitting the datapath-mode into "configured mode" and "operational mode"
   in status outputs, where they differ. The default remains ``bpf.datapathMode=veth``
   but may change in future releases.
+
+* ``gatewayAPI.inferenceExtention`` config option has been introduced. If enabled, Cilium
+  Gateway API will be installed with Gateway API Inference Extension enabled. This is currently
+  in beta.
 
 Changed Options
 ###############

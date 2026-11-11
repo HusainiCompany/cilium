@@ -19,6 +19,8 @@ type BPFLXC struct {
 	// Respond to ARP requests from local containers to resolve the default
 	// gateway.
 	EnableARPResponder bool `config:"enable_arp_responder"`
+	// Enable BPF routing.
+	EnableBPFRouting bool `config:"enable_bpf_routing"`
 	// Pass traffic with extended IP protocols.
 	EnableExtendedIPProtocols bool `config:"enable_extended_ip_protocols"`
 	// Apply Network Policy for ICMP packets.
@@ -29,20 +31,26 @@ type BPFLXC struct {
 	EnableIPv6Fragments bool `config:"enable_ipv6_fragments"`
 	// Enable support for Local Redirect Policy.
 	EnableLRP bool `config:"enable_lrp"`
+	// Enable NAT46/NAT64 translation for NodePort services.
+	EnableNAT46X64 bool `config:"enable_nat_46x64"`
+	// Enable NAT46/NAT64 gateway for NodePort services.
+	EnableNAT46X64Gateway bool `config:"enable_nat_46x64_gateway"`
 	// Use netkit devices for pods.
 	EnableNetkit bool `config:"enable_netkit"`
 	// Enable routes when service has 0 endpoints.
 	EnableNoServiceEndpointsRoutable bool `config:"enable_no_service_endpoints_routable"`
 	// Maintain packet and byte counters for every policy entry.
 	EnablePolicyAccounting bool `config:"enable_policy_accounting"`
+	// Enable audit mode for policies.
+	EnablePolicyAuditMode bool `config:"enable_policy_audit_mode"`
+	// Enable policy verdict notifications.
+	EnablePolicyVerdictNotification bool `config:"enable_policy_verdict_notification"`
 	// Masquerade traffic to remote nodes.
 	EnableRemoteNodeMasquerade bool `config:"enable_remote_node_masquerade"`
 	// Enable source IP verification for endpoint egress.
 	EnableSIPVerification bool `config:"enable_sip_verification"`
 	// Reply with ICMP to traffic to a service with no backends.
 	EnableServiceNoBackendResponse bool `config:"enable_service_no_backend_response"`
-	// Enable socket-based LB for E/W traffic.
-	EnableSocketLBFull bool `config:"enable_socket_lb_full"`
 	// Enable VTEP integration.
 	EnableVTEP bool `config:"enable_vtep"`
 	// The endpoint's security ID.
@@ -73,8 +81,12 @@ type BPFLXC struct {
 	ProxyRedirectViaCiliumNet bool `config:"proxy_redirect_via_cilium_net"`
 	// FIB routing table ID for egress lookups.
 	RtInfo uint32 `config:"rt_info"`
+	// Number of times to retry SNAT.
+	SNATCollisionRetries uint16 `config:"snat_collision_retries"`
 	// The endpoint's security label.
 	SecurityLabel uint32 `config:"security_label"`
+	// Socket-based LB for E/W traffic.
+	SocketLB types.SocketLBConfig `config:"socket_lb"`
 	// Port number used for the overlay network.
 	TunnelPort uint16 `config:"tunnel_port"`
 	// The identifier of the tunnel protocol used for the overlay network.
@@ -87,11 +99,13 @@ type BPFLXC struct {
 
 func NewBPFLXC(node Node) *BPFLXC {
 	return &BPFLXC{false, 0x0, false, false, false, false, false, false, false, false,
-		false, false, false, false, false, false, 0x0, cast[types.V4Addr]([]byte{0x0, 0x0, 0x0, 0x0}),
+		false, false, false, false, false, false, false, false, false,
+		false, 0x0, cast[types.V4Addr]([]byte{0x0, 0x0, 0x0, 0x0}),
 		cast[types.V6Addr]([]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}),
 		0x0, 0x0, 0x0, false, 0x0,
 		cast[types.MACAddr]([]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}),
 		cast[types.V4Addr]([]byte{0x0, 0x0, 0x0, 0x0}),
 		cast[types.V6Addr]([]byte{0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}),
-		0x0, false, 0x0, 0x0, 0x0, 0x0, 0x0, node}
+		0x0, false, 0x0, 0x20, 0x0, cast[types.SocketLBConfig]([]byte{0x0, 0x0, 0x0}),
+		0x0, 0x0, 0x0, node}
 }

@@ -10,10 +10,11 @@
 #include "pktgen.h"
 
 /* Enable code paths under test*/
-#define ENABLE_IPV4
+#define ENABLE_IPV4 1
 
 #include "lib/bpf_lxc.h"
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
 /* Set the LXC source address to be the address of pod one */
 ASSIGN_CONFIG(union v4addr, endpoint_ipv4, { .be32 = v4_pod_one})
 ASSIGN_CONFIG(bool, enable_no_service_endpoints_routable, false)

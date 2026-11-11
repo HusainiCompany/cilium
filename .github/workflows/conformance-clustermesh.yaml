@@ -66,13 +66,13 @@ env:
   contextName2: kind-cluster2-${{ github.run_id }}
 
   # renovate: datasource=github-releases depName=cert-manager/cert-manager
-  CERT_MANAGER_VERSION: v1.21.2
+  CERT_MANAGER_VERSION: v1.21.3
 
 jobs:
   echo-inputs:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     name: Echo Workflow Dispatch Inputs
-    runs-on: ${{ vars.UBUNTU_2404_2CPU_1GB || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.UBUNTU_2604_2CPU_1GB || 'ubuntu-26.04' }}
     steps:
       - name: Echo Workflow Dispatch Inputs
         run: |
@@ -80,7 +80,7 @@ jobs:
 
   commit-status-start:
     name: Commit Status Start
-    runs-on: ${{ vars.UBUNTU_2404_2CPU_1GB || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.UBUNTU_2604_2CPU_1GB || 'ubuntu-26.04' }}
     steps:
       - name: Set initial commit status
         uses: cilium/actions/set-commit-status@687b48a0547e534dd7270d5069a5ab7967c0e907 # main
@@ -89,7 +89,7 @@ jobs:
 
   wait-for-images:
     name: Wait for images
-    runs-on: ${{ vars.UBUNTU_2404_2CPU_1GB || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.UBUNTU_2604_2CPU_1GB || 'ubuntu-26.04' }}
     timeout-minutes: 30
     steps:
       - name: Checkout context ref (trusted)
@@ -110,7 +110,7 @@ jobs:
   installation-and-connectivity:
     needs: [wait-for-images]
     name: Installation and Connectivity Test
-    runs-on: ${{ vars.UBUNTU_2404_4CPU_16GB || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.UBUNTU_2604_4CPU_16GB || 'ubuntu-26.04' }}
     timeout-minutes: 60
     env:
       job_name: "Installation and Connectivity Test"
@@ -269,6 +269,10 @@ jobs:
 
     steps:
       - name: Set commit status to pending
+        # commit-status-start does not re-run, so this is only needed on a re-run. It's ok
+        # to continue on error since the check is reported at the end of the test.
+        if: ${{ github.run_attempt != '1' }}
+        continue-on-error: true
         uses: cilium/actions/set-commit-status@687b48a0547e534dd7270d5069a5ab7967c0e907 # main
         with:
           sha: ${{ inputs.SHA || github.sha }}
@@ -437,8 +441,13 @@ jobs:
         uses: ./.github/actions/kind-external-network
         id: network
 
+      - name: Raise inotify limits for kind
+        run: |
+          sysctl fs.inotify.max_user_instances fs.inotify.max_user_watches
+          sudo sysctl -w fs.inotify.max_user_instances=1280 fs.inotify.max_user_watches=655360
+
       - name: Create Kind cluster 1
-        uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           cluster_name: ${{ env.clusterName1 }}
           version: ${{ env.KIND_VERSION }}
@@ -448,7 +457,7 @@ jobs:
           wait: 0 # The control-plane never becomes ready, since no CNI is present
 
       - name: Create Kind cluster 2
-        uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           cluster_name: ${{ env.clusterName2 }}
           version: ${{ env.KIND_VERSION }}
@@ -506,7 +515,7 @@ jobs:
           echo flags=${FLAGS} >> $GITHUB_OUTPUT
 
       - name: Install Cilium CLI
-        uses: cilium/cilium-cli@c5e42236c7d90bd50e7975ac587f77782666a0aa # v0.20.0
+        uses: cilium/cilium-cli@1ac7fa66909e3730ab3869c8ba7aa7d68f0197fd # v0.20.2
         with:
           skip-build: ${{ env.CILIUM_CLI_SKIP_BUILD }}
           image-repo: ${{ env.CILIUM_CLI_IMAGE_REPO }}

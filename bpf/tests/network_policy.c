@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
 /* Copyright Authors of Cilium */
 
-#define ENABLE_IPV4
-#define ENABLE_IPV6
+#define ENABLE_IPV4 1
+#define ENABLE_IPV6 1
 
 #include <bpf/ctx/skb.h>
 #include "common.h"
@@ -15,6 +15,8 @@
 
 #include "lib/policy.h"
 #include "network_policy_tuples.h"
+
+ASSIGN_CONFIG(bool, enable_ipv4, true)
 
 #define REMOTE_IDENTITY		112233
 

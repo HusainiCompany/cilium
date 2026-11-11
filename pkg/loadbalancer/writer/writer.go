@@ -9,6 +9,7 @@ import (
 	"io"
 	"iter"
 	"log/slog"
+	"net/netip"
 	"slices"
 	"strings"
 	"sync"
@@ -47,11 +48,14 @@ type Writer struct {
 
 	selectBackendsFunc         SelectBackendsFunc
 	isServiceHealthCheckedFunc IsServiceHealthCheckedFunc
+	frontendSourceRangesFunc   FrontendSourceRangesFunc
 }
 
 type SelectBackendsFunc = func(statedb.ReadTxn, iter.Seq2[*loadbalancer.Backend, statedb.Revision], *loadbalancer.Service, *loadbalancer.Frontend) iter.Seq2[*loadbalancer.Backend, statedb.Revision]
 
 type IsServiceHealthCheckedFunc = func(*loadbalancer.Service) bool
+
+type FrontendSourceRangesFunc = func(*loadbalancer.Service, *loadbalancer.Frontend) (loadbalancer.SVCSourceRangesPolicy, []netip.Prefix, bool)
 
 // Backends for the local cluster are associated with ID 0, regardless of the real cluster id.
 const LocalClusterID = 0
@@ -94,6 +98,10 @@ func (w *Writer) SetSelectBackendsFunc(fn SelectBackendsFunc) {
 
 func (w *Writer) SetIsServiceHealthCheckedFunc(fn IsServiceHealthCheckedFunc) {
 	w.isServiceHealthCheckedFunc = fn
+}
+
+func (w *Writer) SetFrontendSourceRangesFunc(fn FrontendSourceRangesFunc) {
+	w.frontendSourceRangesFunc = fn
 }
 
 // SelectBackends filters backends associated with [svc]. If [optionalFrontend] is non-nil, then backends are further filtered
@@ -309,6 +317,7 @@ func (w *Writer) upsertFrontendParams(txn WriteTxn, params loadbalancer.Frontend
 		fe.RedirectTo = old.RedirectTo
 	}
 
+	w.refreshFrontendSourceRanges(fe)
 	w.refreshFrontend(txn, fe)
 	_, _, err = w.fes.Insert(txn, fe)
 	return old, err
@@ -406,6 +415,7 @@ func (w *Writer) updateServiceReferences(txn WriteTxn, svc *loadbalancer.Service
 		fe = fe.Clone()
 		fe.Status = reconciler.StatusPending()
 		fe.Service = svc
+		w.refreshFrontendSourceRanges(fe)
 		if _, _, err := w.fes.Insert(txn, fe); err != nil {
 			return err
 		}
@@ -426,6 +436,21 @@ func (w *Writer) refreshFrontend(txn statedb.ReadTxn, fe *loadbalancer.Frontend)
 	bes, _ := w.BackendsForService(txn, svc.Name)
 	fe.Backends = loadbalancer.BackendsSeq2(w.SelectBackends(txn, bes, svc, fe))
 	fe.HealthCheckBackends = loadbalancer.BackendsSeq2(w.SelectBackendsForHealthChecking(txn, bes, svc, fe))
+}
+
+func (w *Writer) refreshFrontendSourceRanges(fe *loadbalancer.Frontend) {
+	if w.frontendSourceRangesFunc != nil {
+		// frontendSourceRangesFunc can override sourceRanges enforcement per frontend
+		policy, sourceRanges, ok := w.frontendSourceRangesFunc(fe.Service, fe)
+		if ok {
+			fe.SourceRangesPolicy = policy
+			fe.SourceRanges = slices.Clone(sourceRanges)
+			return
+		}
+	}
+
+	fe.SourceRangesPolicy = fe.Service.GetSourceRangesPolicy()
+	fe.SourceRanges = slices.Clone(fe.Service.SourceRanges)
 }
 
 func (w *Writer) RefreshFrontends(txn WriteTxn, name loadbalancer.ServiceName) error {
@@ -478,6 +503,12 @@ func (w *Writer) topologyPreferenceCandidate(svc *loadbalancer.Service, be *load
 	return !be.Unhealthy && be.UnhealthyUpdatedAt != nil
 }
 
+// backendTerminating reports whether the backend is in a terminating state.
+func backendTerminating(be *loadbalancer.Backend) bool {
+	return be.State == loadbalancer.BackendStateTerminating ||
+		be.State == loadbalancer.BackendStateTerminatingNotServing
+}
+
 func (w *Writer) DefaultSelectBackends(txn statedb.ReadTxn, bes iter.Seq2[*loadbalancer.Backend, statedb.Revision], svc *loadbalancer.Service, fe *loadbalancer.Frontend) iter.Seq2[*loadbalancer.Backend, statedb.Revision] {
 	onlyLocal := false
 	isLocalProxyDelegation := func(loadbalancer.L3n4Addr) bool { return true }
@@ -517,14 +548,19 @@ func (w *Writer) DefaultSelectBackends(txn statedb.ReadTxn, bes iter.Seq2[*loadb
 		if candidatesFound {
 			return func(yield func(*loadbalancer.Backend, statedb.Revision) bool) {
 				for be, rev := range bes {
-					if be.NodeName != w.nodeName {
-						continue
-					}
 					if !matchesFrontend(be, fe) {
 						continue
 					}
-					if !w.topologyPreferenceCandidate(svc, be) {
-						continue
+					// Keep terminating backends selected regardless of the
+					// same-node preference so that their established
+					// connections can drain.
+					if !backendTerminating(be) {
+						if be.NodeName != w.nodeName {
+							continue
+						}
+						if !w.topologyPreferenceCandidate(svc, be) {
+							continue
+						}
 					}
 					if !yield(be, rev) {
 						return
@@ -598,7 +634,12 @@ func (w *Writer) DefaultSelectBackends(txn statedb.ReadTxn, bes iter.Seq2[*loadb
 			if checkZoneHints {
 				if be.Zone == nil ||
 					!slices.Contains(be.Zone.ForZones, *thisZone) {
-					continue
+					// A terminating backend has no zone hints. Keep it
+					// selected so that it stays in the datapath maps and
+					// its established connections can drain.
+					if !backendTerminating(be) {
+						continue
+					}
 				}
 			}
 			if !yield(be, rev) {

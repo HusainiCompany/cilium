@@ -110,7 +110,7 @@ env:
 jobs:
   commit-status-start:
     name: Commit Status Start
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Set initial commit status
         uses: cilium/actions/set-commit-status@687b48a0547e534dd7270d5069a5ab7967c0e907 # main
@@ -119,7 +119,7 @@ jobs:
 
   generate-matrix:
     name: Generate Matrix
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       matrix: ${{ steps.generate-matrix.outputs.matrix }}
       timeout: ${{ steps.generate-matrix.outputs.timeout }}
@@ -188,7 +188,7 @@ jobs:
 
   wait-for-images:
     name: Wait for images
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - name: Checkout context ref (trusted)
@@ -208,7 +208,7 @@ jobs:
   lvh-cache-key:
     name: LVH Cache Key
     # Same runner as the legs, so the key describes the packages they install.
-    runs-on: ${{ vars.GH_RUNNER_EXTRA_POWER_UBUNTU_LATEST || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.UBUNTU_2604_4CPU_16GB || 'ubuntu-26.04' }}
     timeout-minutes: 20
     outputs:
       dependency-list-sha: ${{ steps.key.outputs.dependency_list_sha }}
@@ -217,13 +217,13 @@ jobs:
         id: key
         timeout-minutes: 10
         continue-on-error: true
-        uses: cilium/little-vm-helper@f86d344aca812dda5aef167867a9a0a90ca6cca5 # v0.0.31
+        uses: cilium/little-vm-helper@c8b0bfbae3bdda7bc69fb9cd370e4b74ce84986d # v0.0.33
         with:
           derive-dependency-list-sha: 'true'
 
   setup-and-test:
     needs: [wait-for-images, generate-matrix, lvh-cache-key]
-    runs-on: ${{ vars.GH_RUNNER_EXTRA_POWER_UBUNTU_LATEST || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.UBUNTU_2604_4CPU_16GB || 'ubuntu-26.04' }}
     name: 'Setup & Test (${{ matrix.name }}, ${{ matrix.mode }}, ${{ matrix.kernel }})'
     env:
       job_name: 'Setup & Test (${{ matrix.name }}, ${{ matrix.mode }}, ${{ matrix.kernel }})'
@@ -241,6 +241,10 @@ jobs:
           echo '${{ toJSON(matrix) }}'
 
       - name: Set commit status to pending
+        # commit-status-start does not re-run, so this is only needed on a re-run. It's ok
+        # to continue on error since the check is reported at the end of the test.
+        if: ${{ github.run_attempt != '1' }}
+        continue-on-error: true
         uses: cilium/actions/set-commit-status@687b48a0547e534dd7270d5069a5ab7967c0e907 # main
         with:
           sha: ${{ inputs.SHA || github.sha }}
@@ -368,7 +372,6 @@ jobs:
           encryption-strict-ingress: ${{ matrix.encryption-strict-ingress }}
           egress-gateway: ${{ matrix.egress-gateway }}
           host-fw: ${{ matrix.host-fw }}
-          mutual-auth: false
           ingress-controller: ${{ matrix.ingress-controller }}
           misc: ${{ matrix.misc || 'bpfClockProbe=false,cni.uninstall=false' }}
           ciliumendpointslice: ${{ matrix.ciliumendpointslice }}
@@ -399,7 +402,6 @@ jobs:
           encryption-strict-ingress: ${{ matrix.encryption-strict-ingress }}
           egress-gateway: ${{ matrix.egress-gateway }}
           host-fw: ${{ matrix.host-fw }}
-          mutual-auth: false
           ingress-controller: ${{ matrix.ingress-controller }}
           misc: ${{ matrix.misc || 'bpfClockProbe=false,cni.uninstall=false' }}
           ciliumendpointslice: ${{ matrix.ciliumendpointslice }}
@@ -483,7 +485,7 @@ jobs:
 
       - name: Setup bootid file
         if: ${{ steps.vars.outputs.downgrade_version != '' && steps.cilium-stable-config.outputs.skip != 'true' && steps.cilium-newest-config.outputs.skip != 'true' }}
-        uses: cilium/little-vm-helper@f86d344aca812dda5aef167867a9a0a90ca6cca5 # v0.0.31
+        uses: cilium/little-vm-helper@c8b0bfbae3bdda7bc69fb9cd370e4b74ce84986d # v0.0.33
         with:
           provision: 'false'
           cmd: |
@@ -507,7 +509,7 @@ jobs:
 
       - name: Install Cilium CLI
         if: ${{ steps.vars.outputs.downgrade_version != '' && steps.cilium-stable-config.outputs.skip != 'true' && steps.cilium-newest-config.outputs.skip != 'true' }}
-        uses: cilium/cilium-cli@c5e42236c7d90bd50e7975ac587f77782666a0aa # v0.20.0
+        uses: cilium/cilium-cli@1ac7fa66909e3730ab3869c8ba7aa7d68f0197fd # v0.20.2
         with:
           skip-build: ${{ env.CILIUM_CLI_SKIP_BUILD }}
           image-repo: ${{ env.CILIUM_CLI_IMAGE_REPO }}
@@ -551,8 +553,10 @@ jobs:
             cilium encrypt create-key --auth-algo ${{ matrix.key-one }}
           fi
 
+          # Allow time for Envoy to reconnect during agent upgrades and downgrades.
           EXTRA_INSTALL_ARGS="\
             ${{ steps.kvstore.outputs.config }} \
+            --set endpointPolicyUpdateTimeoutDuration=60s \
             --set extraConfig.boot-id-file=/var/run/cilium/boot_id \
             --set envoy.idleTimeoutDurationSeconds=3" # Set proxy idle timeout to a low value so that connections teardown for L7 traffic testing doesn't pollute validation during a later step.
 
@@ -610,8 +614,10 @@ jobs:
         if: ${{ steps.vars.outputs.downgrade_version != '' && steps.vars.outputs.skip_upgrade != 'true' && steps.cilium-stable-config.outputs.skip != 'true' && steps.cilium-newest-config.outputs.skip != 'true' }}
         shell: bash
         run: |
+          # Drop legacy SPIRE values saved by the initial install.
           cilium upgrade \
             --helm-set=disableEnvoyVersionCheck=true \
+            --helm-set=authentication.mutual.spire=null \
             ${{ steps.cilium-newest-config.outputs.config }} \
             ${{ steps.install-cilium.outputs.extra_args }}
 
@@ -719,10 +725,23 @@ jobs:
         if: ${{ steps.vars.outputs.downgrade_version != '' && steps.vars.outputs.skip_upgrade != 'true' && steps.cilium-stable-config.outputs.skip != 'true' && steps.cilium-newest-config.outputs.skip != 'true' }}
         shell: bash
         run: |
+          RELEASE_IMAGE_ARGS=()
+          # Clear image overrides only for patch downgrades. Minor downgrades use
+          # the latest CI images from the previous stable branch.
+          if [ "${{ matrix.mode }}" = "patch" ]; then
+            # Clear saved CI image overrides so the target chart supplies release images.
+            RELEASE_IMAGE_ARGS=(
+              --helm-set=image=null
+              --helm-set=operator.image=null
+              --helm-set=hubble.relay.image=null
+            )
+          fi
+
           cilium upgrade \
             --helm-set=disableEnvoyVersionCheck=true \
             ${{ steps.cilium-stable-config.outputs.config }} \
-            ${{ steps.install-cilium.outputs.extra_args }}
+            ${{ steps.install-cilium.outputs.extra_args }} \
+            "${RELEASE_IMAGE_ARGS[@]}"
 
           cilium status --wait --interactive=false --wait-duration=10m
           kubectl get pods --all-namespaces -o wide

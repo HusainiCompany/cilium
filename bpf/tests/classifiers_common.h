@@ -1,10 +1,9 @@
 /* SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause) */
 /* Copyright Authors of Cilium */
 
-#define ENABLE_IPV4
-#define ENABLE_IPV6
-#define TUNNEL_MODE
-#define ENABLE_IPSEC 1
+#define ENABLE_IPV4 1
+#define ENABLE_IPV6 1
+#define TUNNEL_MODE 1
 #define ENCAP_IFINDEX   1
 
 /* For testing L2/L3 devices, we make use of ETH_HLEN:
@@ -29,6 +28,9 @@ ASSIGN_CONFIG(__u8, tunnel_protocol, TUNNEL_PROTOCOL_VXLAN)
 /* Assign lower values for testing, so that we don't need to craft big packet. */
 ASSIGN_CONFIG(__u32, trace_payload_len, 10UL);
 ASSIGN_CONFIG(__u32, trace_payload_len_overlay, 20UL);
+
+ASSIGN_CONFIG(bool, enable_ipv4, true)
+ASSIGN_CONFIG(bool, enable_ipsec, true)
 
 /* Defining checks for packets from L3 devices as a macro for reusability. */
 #define L3_DEVICE_CHECK(flags, is_ipv4)                                      \

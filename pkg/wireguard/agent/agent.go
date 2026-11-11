@@ -240,10 +240,10 @@ func (a *Agent) Enabled() bool {
 }
 
 // needsIPCache returns true if the agent should subscribe to IPCache events.
-// This is required in native routing mode or if WireguardTrackAllIPsFallback is enabled.
+// This is required in native or hybrid routing mode, or if WireguardTrackAllIPsFallback is enabled.
 // In tunneling mode, only node IPs (always set via updatePeer) are needed.
 func (a *Agent) needsIPCache() bool {
-	return !a.config.TunnelingEnabled || a.config.WireguardTrackAllIPsFallback
+	return a.config.RequiresNativeRouting || a.config.WireguardTrackAllIPsFallback
 }
 
 // initLocalNodeFromWireGuard configures the fields on the local node. Called from
@@ -575,26 +575,28 @@ func (a *Agent) updatePeer(nodeName, pubKeyHex string, nodeIPv4, nodeIPv6 net.IP
 	// Handle Node IP change
 	if peer.nodeIPv4 != nil && !peer.nodeIPv4.Equal(nodeIPv4) {
 		delete(a.nodeNameByNodeIP, peer.nodeIPv4.String())
-		if ip := iputil.IPToNetPrefix(peer.nodeIPv4); ip.IsValid() {
-			peer.queueAllowedIPsRemove(ip)
+		if addr := iputil.AddrFromIP(peer.nodeIPv4); addr.IsValid() {
+			peer.queueAllowedIPsRemove(netip.PrefixFrom(addr, addr.BitLen()))
 		}
 	}
 	if peer.nodeIPv6 != nil && !peer.nodeIPv6.Equal(nodeIPv6) {
 		delete(a.nodeNameByNodeIP, peer.nodeIPv6.String())
-		if ip := iputil.IPToNetPrefix(peer.nodeIPv6); ip.IsValid() {
-			peer.queueAllowedIPsRemove(ip)
+		if addr := iputil.AddrFromIP(peer.nodeIPv6); addr.IsValid() {
+			peer.queueAllowedIPsRemove(netip.PrefixFrom(addr, addr.BitLen()))
 		}
 	}
 
 	if a.config.EnableIPv4 && nodeIPv4 != nil {
-		if ipn := iputil.IPToNetPrefix(nodeIPv4); ipn.IsValid() {
+		if addr := iputil.AddrFromIP(nodeIPv4); addr.IsValid() {
+			ipn := netip.PrefixFrom(addr, addr.BitLen())
 			if !peer.hasAllowedIP(ipn) {
 				peer.queueAllowedIPsInsert(ipn)
 			}
 		}
 	}
 	if a.config.EnableIPv6 && nodeIPv6 != nil {
-		if ipn := iputil.IPToNetPrefix(nodeIPv6); ipn.IsValid() {
+		if addr := iputil.AddrFromIP(nodeIPv6); addr.IsValid() {
+			ipn := netip.PrefixFrom(addr, addr.BitLen())
 			if !peer.hasAllowedIP(ipn) {
 				peer.queueAllowedIPsInsert(ipn)
 			}

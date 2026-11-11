@@ -321,42 +321,6 @@ func writeNodeConfigToBuffer(t *testing.T, nodeCfg *config.Config) string {
 	return buffer.String()
 }
 
-// TestPrivilegedWriteNodeConfigHostFirewall verifies that with host firewall
-// enabled, the ENABLE_HOST_FIREWALL BPF define is present, and without it,
-// it is absent.
-// This covers the Host firewall scenarios previously tested by
-// K8sDatapathConfig.
-func TestPrivilegedWriteNodeConfigHostFirewall(t *testing.T) {
-	testutils.PrivilegedTest(t)
-	ns := netns.NewNetNS(t)
-	setupCiliumDummyDevices(t, ns)
-	err := ns.Do(func() error {
-		setupConfigSuite(t)
-
-		origHostFirewall := option.Config.EnableHostFirewall
-		t.Cleanup(func() {
-			option.Config.EnableHostFirewall = origHostFirewall
-		})
-
-		t.Run("host firewall enabled", func(t *testing.T) {
-			option.Config.EnableHostFirewall = true
-			output := writeNodeConfigToBuffer(t, &dummyNodeCfg)
-			require.Contains(t, output, "define ENABLE_HOST_FIREWALL 1\n",
-				"Expected ENABLE_HOST_FIREWALL define when host firewall is enabled")
-		})
-
-		t.Run("host firewall disabled", func(t *testing.T) {
-			option.Config.EnableHostFirewall = false
-			output := writeNodeConfigToBuffer(t, &dummyNodeCfg)
-			require.NotContains(t, output, "ENABLE_HOST_FIREWALL",
-				"Expected no ENABLE_HOST_FIREWALL define when host firewall is disabled")
-		})
-
-		return nil
-	})
-	require.NoError(t, err)
-}
-
 // TestPrivilegedWriteNodeConfigIPv4Only verifies that when IPv4 is enabled
 // and IPv6 is disabled, only ENABLE_IPV4 is present (not ENABLE_IPV6).
 // This covers the IPv4Only scenario previously tested by K8sDatapathConfig.
@@ -399,10 +363,11 @@ func TestPrivilegedWriteNodeConfigIPv4Only(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestPrivilegedWriteNodeConfigBPFMasquerade verifies that when BPF masquerade
-// is enabled, the correct ENABLE_MASQUERADE_IPV4 and
-// ENABLE_IP_MASQ_AGENT_IPV4 defines are generated.
-// This covers the BPF masquerading with ip-masq-agent scenarios previously
+// TestPrivilegedWriteNodeConfigBPFMasquerade verifies that BPF masquerade keeps the NodePort
+// programs compiled (no SKIP_NODEPORT_PROGS) and that both ENABLE_NODEPORT and
+// ENABLE_MASQUERADE_IPV4 defines are no longer generated (they were replaced by the enable_nodeport
+// and enable_masquerade_ipv4 runtime config).
+// This covers the BPF masquerading scenarios previously
 // tested by K8sDatapathConfig.
 func TestPrivilegedWriteNodeConfigBPFMasquerade(t *testing.T) {
 	testutils.PrivilegedTest(t)
@@ -414,56 +379,31 @@ func TestPrivilegedWriteNodeConfigBPFMasquerade(t *testing.T) {
 		origBPFMasq := option.Config.EnableBPFMasquerade
 		origIPv4Masq := option.Config.EnableIPv4Masquerade
 		origIPv6Masq := option.Config.EnableIPv6Masquerade
-		origIPMasqAgent := option.Config.EnableIPMasqAgent
-		origNativeRoutingCIDR := option.Config.IPv4NativeRoutingCIDR
 		t.Cleanup(func() {
 			option.Config.EnableBPFMasquerade = origBPFMasq
 			option.Config.EnableIPv4Masquerade = origIPv4Masq
 			option.Config.EnableIPv6Masquerade = origIPv6Masq
-			option.Config.EnableIPMasqAgent = origIPMasqAgent
-			option.Config.IPv4NativeRoutingCIDR = origNativeRoutingCIDR
 		})
 
-		t.Run("BPF masquerade with ip-masq-agent", func(t *testing.T) {
+		t.Run("BPF masquerade", func(t *testing.T) {
 			option.Config.EnableBPFMasquerade = true
 			option.Config.EnableIPv4Masquerade = true
 			option.Config.EnableIPv6Masquerade = false
-			option.Config.EnableIPMasqAgent = true
-			option.Config.IPv4NativeRoutingCIDR = netip.MustParsePrefix("10.0.0.0/8")
 
 			output := writeNodeConfigToBuffer(t, &dummyNodeCfg)
-			require.Contains(t, output, "define ENABLE_MASQUERADE_IPV4 1\n",
-				"Expected ENABLE_MASQUERADE_IPV4 define with BPF masquerade")
-			require.Contains(t, output, "define ENABLE_IP_MASQ_AGENT_IPV4 1\n",
-				"Expected ENABLE_IP_MASQ_AGENT_IPV4 define with ip-masq-agent enabled")
-			require.Contains(t, output, "define ENABLE_NODEPORT 1\n",
-				"Expected ENABLE_NODEPORT define with BPF masquerade")
-		})
-
-		t.Run("BPF masquerade without ip-masq-agent", func(t *testing.T) {
-			option.Config.EnableBPFMasquerade = true
-			option.Config.EnableIPv4Masquerade = true
-			option.Config.EnableIPv6Masquerade = false
-			option.Config.EnableIPMasqAgent = false
-
-			nodeCfg := dummyNodeCfg
-			nodeCfg.NativeRoutingCIDRIPv4 = netip.MustParsePrefix("10.0.0.0/8")
-
-			output := writeNodeConfigToBuffer(t, &nodeCfg)
-			require.Contains(t, output, "define ENABLE_MASQUERADE_IPV4 1\n",
-				"Expected ENABLE_MASQUERADE_IPV4 define with BPF masquerade")
-			require.NotContains(t, output, "ENABLE_IP_MASQ_AGENT",
-				"Expected no ENABLE_IP_MASQ_AGENT define without ip-masq-agent")
+			require.NotContains(t, output, "SKIP_NODEPORT_PROGS",
+				"Expected NodePort programs to be compiled with BPF masquerade")
 		})
 
 		t.Run("BPF masquerade disabled", func(t *testing.T) {
 			option.Config.EnableBPFMasquerade = false
 			option.Config.EnableIPv4Masquerade = true
-			option.Config.EnableIPMasqAgent = false
 
 			output := writeNodeConfigToBuffer(t, &dummyNodeCfg)
 			require.NotContains(t, output, "ENABLE_MASQUERADE_IPV4",
 				"Expected no ENABLE_MASQUERADE_IPV4 define without BPF masquerade")
+			require.Contains(t, output, "define SKIP_NODEPORT_PROGS 1\n",
+				"Expected NodePort programs to be skipped without BPF masquerade nor kube-proxy replacement")
 		})
 
 		return nil

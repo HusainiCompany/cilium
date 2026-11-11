@@ -8,7 +8,10 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+	"sync"
 
+	"github.com/cilium/hive/cell"
+	"github.com/cilium/statedb"
 	"github.com/cilium/stream"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/net"
@@ -26,7 +29,6 @@ import (
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/node"
 	nodeAddressing "github.com/cilium/cilium/pkg/node/addressing"
-	nodemanager "github.com/cilium/cilium/pkg/node/manager"
 	nodestore "github.com/cilium/cilium/pkg/node/store"
 	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/option"
@@ -50,50 +52,78 @@ type GetNodeAddresses interface {
 
 // NodeDiscovery represents a node discovery action
 type NodeDiscovery struct {
-	logger           *slog.Logger
-	manager          nodemanager.NodeManager
-	registrar        nodestore.NodeRegistrar
-	registered       chan struct{}
-	cniConfigManager cni.CNIConfigManager
-	k8sGetters       k8sGetters
-	localNodeStore   *node.LocalNodeStore
-	clientset        client.Clientset
-	kvstoreClient    kvstore.Client
-	ctrlmgr          *controller.Manager
-	daemonConfig     *option.DaemonConfig
-	config           config
+	logger                     *slog.Logger
+	db                         *statedb.DB
+	writer                     *node.Writer
+	completeKVStoreNodeListing func()
+	registrar                  nodestore.NodeRegistrar
+	registered                 chan struct{}
+	cniConfigManager           cni.CNIConfigManager
+	k8sGetters                 k8sGetters
+	localNodeStore             *node.LocalNodeStore
+	clientset                  client.Clientset
+	kvstoreClient              kvstore.Client
+	ctrlmgr                    *controller.Manager
+	daemonConfig               *option.DaemonConfig
+	config                     config
+	eniMutator                 ENIMutator
 }
 
-// NewNodeDiscovery returns a pointer to new node discovery object
-func NewNodeDiscovery(
-	logger *slog.Logger,
-	manager nodemanager.NodeManager,
-	clientset client.Clientset,
-	kvstoreClient kvstore.Client,
-	lns *node.LocalNodeStore,
-	cniConfigManager cni.CNIConfigManager,
-	k8sNodeWatcher *watchers.K8sCiliumNodeWatcher,
-	daemonConfig *option.DaemonConfig,
-	c config,
-) *NodeDiscovery {
+type nodeDiscoveryParams struct {
+	cell.In
+
+	Logger           *slog.Logger
+	DB               *statedb.DB
+	NodeWriter       *node.Writer
+	Clientset        client.Clientset
+	KVStoreClient    kvstore.Client
+	LocalNodeStore   *node.LocalNodeStore
+	CNIConfigManager cni.CNIConfigManager
+	K8sNodeWatcher   *watchers.K8sCiliumNodeWatcher
+	DaemonConfig     *option.DaemonConfig
+	Config           config
+
+	// ENIMutator is only needed in ENI IPAM mode, and only provided by the
+	// cells of the AWS integration.
+	ENIMutator ENIMutator `optional:"true"`
+}
+
+func newNodeDiscovery(params nodeDiscoveryParams) (*NodeDiscovery, error) {
 	if !option.Config.EnableCiliumNodeCRD {
-		logger.Info("CiliumNode CRD is disabled; skipping CiliumNode resource management")
-		return &NodeDiscovery{}
+		params.Logger.Info("CiliumNode CRD is disabled; skipping CiliumNode resource management")
+		return &NodeDiscovery{}, nil
 	}
 
-	return &NodeDiscovery{
-		logger:           logger,
-		manager:          manager,
-		localNodeStore:   lns,
-		registered:       make(chan struct{}),
-		cniConfigManager: cniConfigManager,
-		clientset:        clientset,
-		kvstoreClient:    kvstoreClient,
-		ctrlmgr:          controller.NewManager(),
-		k8sGetters:       k8sNodeWatcher,
-		daemonConfig:     daemonConfig,
-		config:           c,
+	if option.Config.IPAM == ipamOption.IPAMENI && params.ENIMutator == nil {
+		return nil, errNoENIMutator
 	}
+
+	n := &NodeDiscovery{
+		logger:           params.Logger,
+		db:               params.DB,
+		writer:           params.NodeWriter,
+		localNodeStore:   params.LocalNodeStore,
+		registered:       make(chan struct{}),
+		cniConfigManager: params.CNIConfigManager,
+		clientset:        params.Clientset,
+		kvstoreClient:    params.KVStoreClient,
+		ctrlmgr:          controller.NewManager(),
+		k8sGetters:       params.K8sNodeWatcher,
+		daemonConfig:     params.DaemonConfig,
+		config:           params.Config,
+		eniMutator:       params.ENIMutator,
+	}
+	if params.KVStoreClient.IsEnabled() {
+		txn := params.DB.WriteTxn(params.NodeWriter.Table())
+		initialNodesDone := params.NodeWriter.RegisterInitializer(txn, "kvstore")
+		txn.Commit()
+		n.completeKVStoreNodeListing = sync.OnceFunc(func() {
+			txn := params.DB.WriteTxn(params.NodeWriter.Table())
+			initialNodesDone(txn)
+			txn.Commit()
+		})
+	}
+	return n, nil
 }
 
 // start configures the local node and starts node discovery. This is called on
@@ -121,12 +151,16 @@ func (n *NodeDiscovery) StartDiscovery(ctx context.Context) {
 			logfields.Node, localNode.Name,
 		)
 		for {
-			if err := n.registrar.RegisterNode(ctx, n.logger, n.kvstoreClient, &localNode.Node, n.manager); err != nil {
+			if err := n.registrar.RegisterNode(ctx, n.logger, n.kvstoreClient, &localNode.Node, n.db, n.writer); err != nil {
 				n.logger.Error("Unable to initialize local node. Retrying...", logfields.Error, err)
 				time.Sleep(time.Second)
 			} else {
 				break
 			}
+		}
+		// RegisterNode loaded the initial KVStore node list before returning.
+		if n.completeKVStoreNodeListing != nil {
+			n.completeKVStoreNodeListing()
 		}
 		close(n.registered)
 	}()
@@ -139,18 +173,11 @@ func (n *NodeDiscovery) StartDiscovery(ctx context.Context) {
 		}
 	}()
 
-	n.manager.NodeUpdated(localNode.Node)
-
 	n.updateLocalNode(ctx, &localNode)
 
 	go func() {
 		// Propagate all updates to the CiliumNode and kvstore representations.
 		for ln := range updates {
-			// We want to propagate a local node update back into the Manager.
-			// This is particularly helpful when an IPSec key rotation occurs
-			// and the manager needs to evaluate the local node's EncryptionKey
-			// field.
-			n.manager.NodeUpdated(ln.Node)
 			n.updateLocalNode(ctx, &ln)
 		}
 	}()
@@ -317,9 +344,9 @@ func (n *NodeDiscovery) mutateNodeResource(ctx context.Context, nodeResource *ci
 			// b) the LocalNode store contains an IP address which we can use instead
 			switch net.IPFamilyOfString(address.IP) {
 			case net.IPv4:
-				return !option.Config.EnableIPv4 || ln.GetCiliumInternalIPv4() != nil
+				return !option.Config.EnableIPv4 || ln.GetCiliumInternalIPv4().IsValid()
 			case net.IPv6:
-				return !option.Config.EnableIPv6 || ln.GetCiliumInternalIPv6() != nil
+				return !option.Config.EnableIPv6 || ln.GetCiliumInternalIPv6().IsValid()
 			}
 		}
 

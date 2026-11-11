@@ -15,8 +15,8 @@
  * written into node_config.h at runtime.
  */
 #define SECLABEL WORLD_ID
-#define SECLABEL_IPV4 WORLD_IPV4_ID
-#define SECLABEL_IPV6 WORLD_IPV6_ID
+#define SECLABEL_IPV4 world_ipv4_id()
+#define SECLABEL_IPV6 world_ipv6_id()
 
 /* Controls the inclusion of the CILIUM_CALL_HANDLE_ICMP6_NS section in the
  * object file.
@@ -44,7 +44,7 @@
 #ifdef ENABLE_IPV6
 /* See the equivalent v4 path for comments */
 static __always_inline int
-handle_ipv6(struct __ctx_buff *ctx, __u32 identity __maybe_unused, __s8 *ext_err __maybe_unused)
+handle_ipv6(struct __ctx_buff *ctx, __u32 identity __maybe_unused, __s8 *ext_err)
 {
 	void *data_end, *data;
 	struct ipv6hdr *ip6;
@@ -63,8 +63,7 @@ handle_ipv6(struct __ctx_buff *ctx, __u32 identity __maybe_unused, __s8 *ext_err
 			return DROP_FRAG_NOSUPPORT;
 	}
 
-#ifdef ENABLE_NODEPORT
-	if (!ctx_skip_nodeport(ctx)) {
+	if (NODEPORT_ENABLED && !ctx_skip_nodeport(ctx)) {
 		bool punt_to_stack = false;
 		bool is_dsr = false;
 
@@ -76,7 +75,6 @@ handle_ipv6(struct __ctx_buff *ctx, __u32 identity __maybe_unused, __s8 *ext_err
 		if (!revalidate_data(ctx, &data, &data_end, &ip6))
 			return DROP_INVALID;
 	}
-#endif
 
 	ep = lookup_ip6_endpoint(ip6);
 	if (ep && !(ep->flags & ENDPOINT_MASK_HOST_DELIVERY)) {
@@ -122,9 +120,8 @@ int tail_handle_ipv6(struct __ctx_buff *ctx)
 }
 #endif /* ENABLE_IPV6 */
 
-#ifdef ENABLE_IPV4
 static __always_inline int
-handle_ipv4(struct __ctx_buff *ctx, __u32 identity __maybe_unused, __s8 *ext_err __maybe_unused)
+handle_ipv4(struct __ctx_buff *ctx, __u32 identity __maybe_unused, __s8 *ext_err)
 {
 	void *data_end, *data;
 	struct iphdr *ip4;
@@ -144,8 +141,7 @@ handle_ipv4(struct __ctx_buff *ctx, __u32 identity __maybe_unused, __s8 *ext_err
 			return DROP_FRAG_NOSUPPORT;
 	}
 
-#ifdef ENABLE_NODEPORT
-	if (!ctx_skip_nodeport(ctx)) {
+	if (NODEPORT_ENABLED && !ctx_skip_nodeport(ctx)) {
 		bool punt_to_stack = false;
 		bool is_dsr = false;
 
@@ -164,7 +160,6 @@ handle_ipv4(struct __ctx_buff *ctx, __u32 identity __maybe_unused, __s8 *ext_err
 		if (!revalidate_data(ctx, &data, &data_end, &ip4))
 			return DROP_INVALID;
 	}
-#endif
 
 	/* Lookup IPv4 address in the list of local endpoints and host IPs.
 	 *
@@ -246,7 +241,6 @@ int tail_handle_ipv4(struct __ctx_buff *ctx)
 						METRIC_INGRESS);
 	return ret;
 }
-#endif /* ENABLE_IPV4 */
 
 /* from-wireguard is attached as a tc ingress filter to the cilium_wg0 device. */
 __section_entry
@@ -270,7 +264,6 @@ int cil_from_wireguard(struct __ctx_buff *ctx)
 	if (CONFIG(enable_identity_mark))
 		set_decrypt_mark(ctx, 0);
 
-#if defined(TUNNEL_MODE) && !(defined(ENABLE_NODEPORT) && defined(ENABLE_NODE_ENCRYPTION))
 	/* In native routing mode we want to deliver packets to local endpoints
 	 * straight from BPF, without passing through the stack.
 	 * This matches overlay mode (where bpf_overlay would handle the delivery)
@@ -286,8 +279,9 @@ int cil_from_wireguard(struct __ctx_buff *ctx)
 	 *
 	 * Since neither of these conditions are met, we can return CTX_ACT_OK.
 	 */
-	return CTX_ACT_OK;
-#endif
+	if (is_defined(TUNNEL_MODE) &&
+	    !(NODEPORT_ENABLED && is_defined(ENABLE_NODE_ENCRYPTION)))
+		return CTX_ACT_OK;
 
 	switch (proto) {
 #ifdef ENABLE_IPV6
@@ -310,8 +304,10 @@ int cil_from_wireguard(struct __ctx_buff *ctx)
 								CTX_ACT_OK, METRIC_INGRESS);
 #endif
 
-#ifdef ENABLE_IPV4
 	case bpf_htons(ETH_P_IP):
+		if (!is_defined(ENABLE_IPV4))
+			break;
+
 		if (!revalidate_data_pull(ctx, &data, &data_end, &ip4))
 			return send_drop_notify_error(ctx, identity, DROP_INVALID, METRIC_INGRESS);
 
@@ -333,7 +329,6 @@ int cil_from_wireguard(struct __ctx_buff *ctx)
 		 */
 		return send_drop_notify_error_with_exitcode_ext(ctx, identity, ret, ext_err,
 								CTX_ACT_OK, METRIC_INGRESS);
-#endif
 	}
 
 	send_trace_notify(ctx, TRACE_FROM_CRYPTO, UNKNOWN_ID, UNKNOWN_ID,
@@ -348,8 +343,8 @@ int cil_from_wireguard(struct __ctx_buff *ctx)
 __section_entry
 int cil_to_wireguard(struct __ctx_buff *ctx)
 {
-	int __maybe_unused ret;
-	__s8 __maybe_unused ext_err = 0;
+	int ret;
+	__s8 ext_err = 0;
 	__be16 proto = ctx_get_protocol(ctx);
 	__u32 src_sec_identity = UNKNOWN_ID;
 	__u32 magic = ctx->mark & MARK_MAGIC_HOST_MASK;
@@ -365,17 +360,17 @@ int cil_to_wireguard(struct __ctx_buff *ctx)
 	bpf_clear_meta(ctx);
 	check_and_store_ip_trace_id(ctx);
 
-#ifdef ENABLE_NODEPORT
-	if (magic == MARK_MAGIC_OVERLAY)
-		goto out;
+	if (NODEPORT_ENABLED) {
+		if (magic == MARK_MAGIC_OVERLAY)
+			goto out;
 
-	ret = handle_nat_fwd(ctx, 0, src_sec_identity, proto, true, &trace, &ext_err);
-	if (IS_ERR(ret))
-		return send_drop_notify_error_ext(ctx, src_sec_identity, ret, ext_err,
-						  METRIC_EGRESS);
+		ret = handle_nat_fwd(ctx, 0, src_sec_identity, proto, true, &trace, &ext_err);
+		if (IS_ERR(ret))
+			return send_drop_notify_error_ext(ctx, src_sec_identity, ret, ext_err,
+							  METRIC_EGRESS);
+	}
 
 out:
-#endif /* ENABLE_NODEPORT */
 
 	send_trace_notify(ctx, TRACE_TO_CRYPTO, src_sec_identity, UNKNOWN_ID,
 			  TRACE_EP_ID_UNKNOWN, CONFIG(interface_ifindex),

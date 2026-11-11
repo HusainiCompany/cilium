@@ -5,6 +5,8 @@
 #include <bpf/config/global.h>
 #include <bpf/config/node.h>
 
+#define IS_BPF_ALIGNCHECKER	1
+
 /*
  * The __COUNTER__ macro expands to an integer value which is increasing every
  * time the macro is used.  Extra macros are required so that the __COUNTER__
@@ -124,3 +126,7 @@ add_type(struct skip_lb6_key);
 
 #include "lib/network_device.h"
 add_type(struct device_state);
+
+#include "lib/lpm.h"
+add_type(struct lpm_v4_key);
+add_type(struct lpm_v6_key);

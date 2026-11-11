@@ -6,7 +6,7 @@
 #include "pktgen.h"
 
 /* Enable code paths under test */
-#define ENABLE_IPV4
+#define ENABLE_IPV4 1
 
 #define CLIENT_IP		v4_pod_one
 #define CLIENT_PORT		__bpf_htons(111)
@@ -21,6 +21,7 @@ static volatile const __u8 *server_mac = mac_two;
 
 #include "lib/bpf_lxc.h"
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
 ASSIGN_CONFIG(union v4addr, endpoint_ipv4, { .be32 = v4_pod_one})
 
 #include "lib/policy.h"

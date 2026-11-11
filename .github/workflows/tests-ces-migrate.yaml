@@ -62,7 +62,7 @@ jobs:
   echo-inputs:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     name: Echo Workflow Dispatch Inputs
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Echo Workflow Dispatch Inputs
         run: |
@@ -70,7 +70,7 @@ jobs:
 
   commit-status-start:
     name: Commit Status Start
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Set initial commit status
         uses: cilium/actions/set-commit-status@687b48a0547e534dd7270d5069a5ab7967c0e907 # main
@@ -79,7 +79,7 @@ jobs:
 
   wait-for-images:
     name: Wait for images
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - name: Checkout context ref (trusted)
@@ -99,13 +99,17 @@ jobs:
 
   setup-and-test:
     needs: [wait-for-images]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     name: Installation and Migration Test
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       job_name: "Installation and Migration Test"
     steps:
       - name: Set commit status to pending
+        # commit-status-start does not re-run, so this is only needed on a re-run. It's ok
+        # to continue on error since the check is reported at the end of the test.
+        if: ${{ github.run_attempt != '1' }}
+        continue-on-error: true
         uses: cilium/actions/set-commit-status@687b48a0547e534dd7270d5069a5ab7967c0e907 # main
         with:
           sha: ${{ inputs.SHA || github.sha }}
@@ -143,7 +147,7 @@ jobs:
           echo sha=${SHA} >> $GITHUB_OUTPUT
 
       - name: Create kind cluster
-        uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        uses: helm/kind-action@1544676c07bb3570fcb70166beaa07c4528fd4aa # v1.15.1
         with:
           version: ${{ env.KIND_VERSION }}
           node_image: ${{ env.KIND_K8S_IMAGE }}
@@ -170,13 +174,12 @@ jobs:
           chart-dir: 'install/kubernetes/cilium'
           ipv6: false
           egress-gateway: false # Currently incompatible with CES
-          mutual-auth: false
-          misc: 'bpfClockProbe=false,cni.uninstall=false'
+          misc: 'bpfClockProbe=false,cni.uninstall=false,hubble.relay.enabled=true'
           image-pull-secret: "cilium-registry"
 
       - name: Install Cilium CLI
         if: ${{ steps.cilium-config.outputs.skip != 'true' }}
-        uses: cilium/cilium-cli@c5e42236c7d90bd50e7975ac587f77782666a0aa # v0.20.0
+        uses: cilium/cilium-cli@1ac7fa66909e3730ab3869c8ba7aa7d68f0197fd # v0.20.2
         with:
           skip-build: ${{ env.CILIUM_CLI_SKIP_BUILD }}
           image-repo: ${{ env.CILIUM_CLI_IMAGE_REPO }}
@@ -194,9 +197,27 @@ jobs:
         if: ${{ steps.cilium-config.outputs.skip != 'true' }}
         run: |
           cilium status --wait --interactive=false
+          kubectl rollout status -n kube-system deployment/hubble-relay
           kubectl get pods --all-namespaces -o wide
           mkdir -p cilium-junits
           kubectl -n kube-system exec daemonset/cilium -c cilium-agent -- cilium-dbg status
+
+      - name: Validate Hubble workloads with CEPs
+        if: ${{ steps.cilium-config.outputs.skip != 'true' }}
+        timeout-minutes: 10
+        run: |
+          cilium hubble port-forward > hubble-port-forward.log 2>&1 &
+          port_forward_pid=$!
+          trap 'kill "${port_forward_pid}" 2>/dev/null || true' EXIT
+          if ! timeout 30s sh -c 'until nc -z 127.0.0.1 4245; do sleep 1; done'; then
+            cat hubble-port-forward.log
+            exit 1
+          fi
+          cilium connectivity test \
+            --test=hubble-workload \
+            --hubble=true \
+            --flow-validation=strict \
+            --junit-file=cilium-junits/hubble-workload-ceps.xml
 
       - name: Setup conn-disrupt-test
         if: ${{ steps.cilium-config.outputs.skip != 'true' }}
@@ -223,8 +244,26 @@ jobs:
           kubectl rollout restart -n kube-system ds cilium
 
           cilium status --wait --interactive=false
+          kubectl rollout status -n kube-system deployment/hubble-relay
           kubectl get pods --all-namespaces -o wide
           kubectl -n kube-system exec daemonset/cilium -c cilium-agent -- cilium-dbg status
+
+      - name: Validate Hubble workloads with CESs
+        if: ${{ steps.cilium-config.outputs.skip != 'true' }}
+        timeout-minutes: 10
+        run: |
+          cilium hubble port-forward > hubble-port-forward.log 2>&1 &
+          port_forward_pid=$!
+          trap 'kill "${port_forward_pid}" 2>/dev/null || true' EXIT
+          if ! timeout 30s sh -c 'until nc -z 127.0.0.1 4245; do sleep 1; done'; then
+            cat hubble-port-forward.log
+            exit 1
+          fi
+          cilium connectivity test \
+            --test=hubble-workload \
+            --hubble=true \
+            --flow-validation=strict \
+            --junit-file=cilium-junits/hubble-workload-ces.xml
 
       - name: Run tests after migration
         if: ${{ steps.cilium-config.outputs.skip != 'true' }}

@@ -10,8 +10,7 @@ static __u64 __now;
 
 #include "common.h"
 
-#define ENABLE_IPV4
-#define ENABLE_NODEPORT
+#define ENABLE_IPV4 1
 
 #include <bpf/config/node.h>
 #include "lib/common.h"
@@ -25,7 +24,9 @@ static __u64 __now;
 #define REPORT_ALL_FLAGS 0xFF
 #define REPORT_NO_FLAGS 0x0
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
 ASSIGN_CONFIG(__u32, trace_payload_len, 128UL);
+ASSIGN_CONFIG(bool, enable_nodeport, true)
 
 /* Advance global (fake) time by one unit. */
 void advance_time(void)

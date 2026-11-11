@@ -4,6 +4,7 @@
 package defaults
 
 import (
+	"net/netip"
 	"time"
 )
 
@@ -43,12 +44,6 @@ const (
 
 	// IPv6ClusterAllocCIDRBase is the default base for IPv6ClusterAllocCIDR
 	IPv6ClusterAllocCIDRBase = "f00d::"
-
-	// IPv6NAT46x64CIDR is the default prefix for NAT46x64 gateway
-	IPv6NAT46x64CIDR = IPv6NAT46x64CIDRBase + "/96"
-
-	// IPv6NAT46x64CIDRBase is the default base for IPv6NAT46x64CIDR
-	IPv6NAT46x64CIDRBase = "64:ff9b::"
 
 	// RuntimePath is the default path to the runtime directory
 	RuntimePath = "/var/run/cilium"
@@ -140,11 +135,6 @@ const (
 	// datapath is updated with the new IP information.
 	FQDNProxyResponseMaxDelay = 100 * time.Millisecond
 
-	// ToFQDNsPreCache is a path to a file with DNS cache data to insert into the
-	// global cache on startup.
-	// The file is not re-read after agent start.
-	ToFQDNsPreCache = ""
-
 	// DNSProxyEnableTransparentMode enables transparent mode for the DNS proxy.
 	DNSProxyEnableTransparentMode = false
 
@@ -216,7 +206,7 @@ const (
 	EnableL7Proxy = true
 
 	// EnableHostLegacyRouting is the default value for using the old routing path via stack.
-	EnableHostLegacyRouting = false
+	EnableHostLegacyRouting = true
 
 	// PreAllocateMaps is the default value for BPF map preallocation
 	PreAllocateMaps = true
@@ -543,6 +533,15 @@ const (
 
 	// EnableDatapathPlugins is the default value for option.EnableDatapathPlugins
 	EnableDatapathPlugins = false
+)
+
+var (
+	// IPv6NAT46x64CIDR is the RFC6052 well-known prefix used by the NAT46x64
+	// gateway
+	IPv6NAT46x64CIDR = netip.MustParsePrefix("64:ff9b::/96")
+
+	// IPv6NAT46x64CIDRBase is the base address of IPv6NAT46x64CIDR
+	IPv6NAT46x64CIDRBase = IPv6NAT46x64CIDR.Addr()
 )
 
 var (

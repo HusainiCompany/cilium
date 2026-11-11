@@ -7,12 +7,14 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"slices"
 	"testing"
 
 	"github.com/cilium/hive/hivetest"
 	"github.com/stretchr/testify/require"
 	k8sErrors "k8s.io/apimachinery/pkg/api/errors"
 
+	metricsmock "github.com/cilium/cilium/operator/pkg/ipam/metrics/mock"
 	awsTypes "github.com/cilium/cilium/pkg/aws/types"
 	"github.com/cilium/cilium/pkg/defaults"
 	iputil "github.com/cilium/cilium/pkg/ip"
@@ -20,6 +22,7 @@ import (
 	v2 "github.com/cilium/cilium/pkg/k8s/apis/cilium.io/v2"
 	"github.com/cilium/cilium/pkg/logging"
 	"github.com/cilium/cilium/pkg/time"
+	"github.com/cilium/cilium/pkg/trigger"
 )
 
 type testNeededDef struct {
@@ -77,44 +80,6 @@ func TestCalculateExcessIPs(t *testing.T) {
 	for _, d := range excessDef {
 		result := calculateExcessIPs(d.available, d.used, d.preallocate, d.minallocate, d.maxabovewatermark)
 		require.Equal(t, d.result, result)
-	}
-}
-
-func TestStaticIPNeedsResolution(t *testing.T) {
-	for _, tc := range []struct {
-		name             string
-		assignedStaticIP string
-		want             bool
-	}{
-		{
-			name:             "empty value not yet assigned",
-			assignedStaticIP: "",
-			want:             true,
-		},
-		{
-			name:             "legacy azure public IP prefix resource ID",
-			assignedStaticIP: "/subscriptions/0000/resourceGroups/rg/providers/Microsoft.Network/publicIPPrefixes/prefix",
-			want:             true,
-		},
-		{
-			name:             "legacy azure public IP resource ID",
-			assignedStaticIP: "/subscriptions/0000/resourceGroups/rg/providers/Microsoft.Network/publicIPAddresses/cilium-managed-public-ip",
-			want:             true,
-		},
-		{
-			name:             "valid IPv4 address",
-			assignedStaticIP: "203.0.113.7",
-			want:             false,
-		},
-		{
-			name:             "valid IPv6 address",
-			assignedStaticIP: "2001:db8::1",
-			want:             false,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, staticIPNeedsResolution(tc.assignedStaticIP))
-		})
 	}
 }
 
@@ -208,6 +173,70 @@ func TestMaintainIPPoolReleasesPoolMaintenance(t *testing.T) {
 		require.NoError(t, node.MaintainIPPool(context.Background()))
 		require.False(t, waitingForPoolMaintenance(node), "the pass must release the flag it took")
 		require.True(t, node.allocationNeeded(), "node must report its deficit again so the sign of life can re-drive it")
+	})
+}
+
+// newFullPassTestNode returns a node wired for a MaintainIPPool pass that runs
+// to completion, with an instance sync trigger that does nothing.
+func newFullPassTestNode(t *testing.T) *Node {
+	t.Helper()
+
+	am := newAllocationImplementationMock()
+	node := newMaintenanceTestNode(t, true)
+	node.manager.instancesAPI = am
+	node.manager.metricsAPI = metricsmock.NewMockMetrics()
+	node.ops = &nodeOperationsMock{allocator: am}
+	node.ipv4Alloc = ipAllocAttrs{
+		ipsMarkedForRelease: make(map[netip.Addr]time.Time),
+		ipReleaseStatus:     make(map[netip.Addr]string),
+	}
+
+	instanceSync, err := trigger.NewTrigger(trigger.Parameters{
+		Name:        "test-instance-sync",
+		TriggerFunc: func([]string) {},
+	})
+	require.NoError(t, err)
+	t.Cleanup(instanceSync.Shutdown)
+	node.instanceSync = instanceSync
+
+	return node
+}
+
+func resyncNeeded(n *Node) time.Time {
+	n.mutex.RLock()
+	defer n.mutex.RUnlock()
+	return n.resyncNeeded
+}
+
+// TestMaintainIPPoolRequiresResyncOnlyOnMutation verifies that a pass waits
+// for a resync of the instance only when it changed the instance, so that a
+// pass that changed nothing does not hold off the node's next allocation.
+func TestMaintainIPPoolRequiresResyncOnlyOnMutation(t *testing.T) {
+	t.Run("pass that changed nothing", func(t *testing.T) {
+		node := newFullPassTestNode(t)
+		node.stats.IPv4.NeededIPs = 0
+
+		require.NoError(t, node.MaintainIPPool(t.Context()))
+		require.True(t, resyncNeeded(node).IsZero(), "a pass that changed nothing must not wait for a resync")
+
+		node.mutex.Lock()
+		node.stats.IPv4.NeededIPs = 1
+		node.mutex.Unlock()
+		require.True(t, node.allocationNeeded(), "a deficit must be acted upon without waiting for a resync")
+	})
+
+	t.Run("pass that allocated", func(t *testing.T) {
+		node := newFullPassTestNode(t)
+		beforePass := time.Now()
+
+		require.NoError(t, node.MaintainIPPool(t.Context()))
+		require.False(t, resyncNeeded(node).IsZero(), "a pass that allocated must wait for a resync")
+
+		node.updateLastResync(beforePass)
+		require.False(t, resyncNeeded(node).IsZero(), "a resync started before the allocation must not end the wait")
+
+		node.updateLastResync(time.Now())
+		require.True(t, resyncNeeded(node).IsZero(), "a resync started after the allocation must end the wait")
 	})
 }
 
@@ -355,6 +384,137 @@ func enisToCIDRs(enis map[string]awsTypes.ENI) []netip.Prefix {
 		}
 	}
 	return out
+}
+
+// newPoolDemandNode returns a node whose agent uses the multi-pool allocator
+// and requests the given number of addresses from the default pool. The node
+// has no IPv4 addresses or IPv6 prefixes available yet.
+func newPoolDemandNode(t *testing.T, requestedIPv4, requestedIPv6 int) *Node {
+	t.Helper()
+
+	cn := newCiliumNode("test-node", 8, 16, 0)
+	cn.Spec.IPAM.MaxAboveWatermark = 4
+	cn.Spec.IPAM.Pools.Requested = []ipamTypes.IPAMPoolRequest{
+		{
+			Pool: defaults.IPAMDefaultIPPool,
+			Needed: ipamTypes.IPAMPoolDemand{
+				IPv4Addrs: requestedIPv4,
+				IPv6Addrs: requestedIPv6,
+			},
+		},
+	}
+	n := &Node{
+		rootLogger: hivetest.Logger(t),
+		name:       "test-node",
+		manager:    &NodeManager{releaseExcessIPs: true},
+		logLimiter: logging.NewLimiter(10*time.Second, 3), // 1 log / 10 secs, burst of 3
+		resource:   cn,
+		ops:        &nodeOperationsMock{allocator: newAllocationImplementationMock()},
+	}
+	n.updateLogger()
+	return n
+}
+
+func TestRecalculateIPv6Only(t *testing.T) {
+	t.Run("IPv6-only node needs no IPv4 addresses", func(t *testing.T) {
+		n := newPoolDemandNode(t, 0, 8)
+		n.recalculate(t.Context())
+
+		stats := n.Stats()
+		require.Zero(t, stats.IPv4.NeededIPs, "pre-allocate and min-allocate must not apply to IPv4")
+		require.Zero(t, stats.IPv4.ExcessIPs)
+		require.Equal(t, 1, stats.IPv6.NeededPrefixes)
+		require.True(t, n.allocationNeeded())
+	})
+
+	t.Run("dual-stack node still pre-allocates IPv4", func(t *testing.T) {
+		n := newPoolDemandNode(t, 8, 8)
+		n.recalculate(t.Context())
+
+		stats := n.Stats()
+		require.Equal(t, 16, stats.IPv4.NeededIPs, "min-allocate must apply to IPv4")
+		require.Equal(t, 1, stats.IPv6.NeededPrefixes)
+	})
+
+	t.Run("IPv4-only request is not IPv6-only", func(t *testing.T) {
+		n := newPoolDemandNode(t, 8, 0)
+		n.recalculate(t.Context())
+
+		stats := n.Stats()
+		require.Equal(t, 16, stats.IPv4.NeededIPs)
+		require.Zero(t, stats.IPv6.NeededPrefixes)
+	})
+
+	t.Run("CRD allocator node is not IPv6-only", func(t *testing.T) {
+		// Status.IPAM.Used being populated means the agent still uses
+		// the CRD allocator, whatever Pools.Requested contains.
+		n := newPoolDemandNode(t, 0, 8)
+		n.resource.Status.IPAM.Used[iputil.AddrFrom(netip.MustParseAddr("10.0.0.1"))] = ipamTypes.AllocationIP{Owner: "pod"}
+		n.recalculate(t.Context())
+
+		require.Equal(t, 16, n.Stats().IPv4.NeededIPs)
+	})
+}
+
+func TestRecalculateAvailableIPs(t *testing.T) {
+	t.Run("every IPv4 address of attached prefixes is counted", func(t *testing.T) {
+		n := newPoolDemandNode(t, 8, 0)
+		n.ops.(*nodeOperationsMock).allocatedIPs = []string{"10.0.0.1"}
+		n.ops.(*nodeOperationsMock).attachedCIDRs = []netip.Prefix{
+			netip.MustParsePrefix("10.0.0.1/32"),
+			netip.MustParsePrefix("10.0.0.16/28"),
+			netip.MustParsePrefix("2001:db8::/80"),
+		}
+		n.recalculate(t.Context())
+
+		require.Equal(t, 17, n.Stats().IPv4.AvailableIPs)
+	})
+
+	t.Run("attached addresses missing from the allocation map are not counted", func(t *testing.T) {
+		n := newPoolDemandNode(t, 8, 0)
+		n.ops.(*nodeOperationsMock).allocatedIPs = []string{"10.0.0.1", "10.0.0.2"}
+		n.ops.(*nodeOperationsMock).attachedCIDRs = []netip.Prefix{
+			netip.MustParsePrefix("10.0.0.2/32"),
+			netip.MustParsePrefix("10.0.0.3/32"),
+		}
+		n.recalculate(t.Context())
+
+		require.Equal(t, 2, n.Stats().IPv4.AvailableIPs)
+	})
+
+	t.Run("allocation map is counted when no attached CIDRs are reported", func(t *testing.T) {
+		n := newPoolDemandNode(t, 8, 0)
+		n.ops.(*nodeOperationsMock).allocatedIPs = []string{"10.0.0.1", "10.0.0.2"}
+		n.recalculate(t.Context())
+
+		require.Equal(t, 2, n.Stats().IPv4.AvailableIPs)
+	})
+}
+
+func TestDetermineMaintenanceActionIPv6Only(t *testing.T) {
+	t.Run("IPv6-only node allocates no IPv4 addresses", func(t *testing.T) {
+		n := newPoolDemandNode(t, 0, 8)
+		n.recalculate(t.Context())
+
+		a, err := n.determineMaintenanceAction()
+		require.NoError(t, err)
+		require.NotNil(t, a)
+		require.NotNil(t, a.allocation)
+		require.Zero(t, a.allocation.IPv4.MaxIPsToAllocate, "max-above-watermark and surge must not apply to IPv4")
+		require.Equal(t, 1, a.allocation.IPv6.MaxPrefixesToAllocate)
+	})
+
+	t.Run("dual-stack node allocates IPv4 up to the watermark", func(t *testing.T) {
+		n := newPoolDemandNode(t, 8, 8)
+		n.recalculate(t.Context())
+
+		a, err := n.determineMaintenanceAction()
+		require.NoError(t, err)
+		require.NotNil(t, a)
+		require.NotNil(t, a.allocation)
+		require.Equal(t, 16+4, a.allocation.IPv4.MaxIPsToAllocate)
+		require.Equal(t, 1, a.allocation.IPv6.MaxPrefixesToAllocate)
+	})
 }
 
 func TestTrackMultiPoolAllocatedLocked(t *testing.T) {
@@ -585,6 +745,7 @@ func TestHandleMultiPoolCIDRRelease(t *testing.T) {
 			ops:                            mock,
 			excessIPReleaseDelay:           5 * time.Second,
 			multiPoolCIDRsMarkedForRelease: marked,
+			stats:                          Statistics{IPv4: IPStatistics{ExcessIPs: 1 << 16}},
 		}
 		n.logger.Store(n.rootLogger)
 		cn := &v2.CiliumNode{}
@@ -817,5 +978,97 @@ func TestHandleMultiPoolCIDRRelease(t *testing.T) {
 		require.True(t, mutated)
 		require.Len(t, mock.releaseCalls, 2)
 		require.Empty(t, n.multiPoolCIDRsMarkedForRelease)
+	})
+
+	t.Run("does not release below min-allocate", func(t *testing.T) {
+		const (
+			available   = 28
+			used        = 4
+			preAllocate = 1
+			minAllocate = 20
+		)
+		var marked []netip.Prefix
+		for i := used; i < available; i++ {
+			marked = append(marked, netip.PrefixFrom(netip.AddrFrom4([4]byte{10, 0, 0, byte(10 + i)}), 32))
+		}
+		mock := &multiPoolOpsMock{
+			prepare: func(released []netip.Prefix) []*ReleaseAction {
+				return []*ReleaseAction{{
+					InterfaceID:    "eni-1",
+					CIDRsToRelease: slices.Clone(released),
+				}}
+			},
+		}
+		markedMap := make(map[netip.Prefix]time.Time, len(marked))
+		for _, cidr := range marked {
+			markedMap[cidr] = past()
+		}
+		n := setupNode(t, mock, markedMap, true)
+		n.stats.IPv4.ExcessIPs = calculateExcessIPs(available, used, preAllocate, minAllocate, 0)
+
+		_, err := n.handleMultiPoolCIDRRelease(t.Context())
+		require.NoError(t, err)
+
+		releasedCount := 0
+		for _, call := range mock.releaseCalls {
+			releasedCount += len(call.CIDRsToRelease)
+		}
+		require.Equal(t, available-minAllocate, releasedCount)
+		require.Len(t, n.multiPoolCIDRsMarkedForRelease, len(marked)-(available-minAllocate))
+	})
+
+	t.Run("waits for resync before releasing", func(t *testing.T) {
+		mock := &multiPoolOpsMock{
+			prepare: func(released []netip.Prefix) []*ReleaseAction {
+				return []*ReleaseAction{{InterfaceID: "eni-1", CIDRsToRelease: slices.Clone(released)}}
+			},
+		}
+		n := setupNode(t, mock, map[netip.Prefix]time.Time{
+			netip.MustParsePrefix("10.0.0.1/32"): past(),
+		}, true)
+		n.resyncNeeded = time.Now()
+
+		mutated, err := n.handleMultiPoolCIDRRelease(t.Context())
+		require.NoError(t, err)
+		require.False(t, mutated)
+		require.Empty(t, mock.releaseCalls)
+		require.Len(t, n.multiPoolCIDRsMarkedForRelease, 1)
+	})
+
+	t.Run("failed release requires resync", func(t *testing.T) {
+		mock := &multiPoolOpsMock{
+			prepare: func(released []netip.Prefix) []*ReleaseAction {
+				return []*ReleaseAction{{InterfaceID: "eni-1", CIDRsToRelease: slices.Clone(released)}}
+			},
+			releaseFn: func(*ReleaseAction) ([]netip.Prefix, error) {
+				return nil, errors.New("timeout")
+			},
+		}
+		n := setupNode(t, mock, map[netip.Prefix]time.Time{
+			netip.MustParsePrefix("10.0.0.1/32"): past(),
+		}, true)
+
+		mutated, err := n.handleMultiPoolCIDRRelease(t.Context())
+		require.Error(t, err)
+		require.False(t, mutated)
+		require.False(t, n.resyncNeeded.IsZero())
+	})
+
+	t.Run("releaseNeeded waits for pool maintenance and resync", func(t *testing.T) {
+		n := setupNode(t, &multiPoolOpsMock{}, map[netip.Prefix]time.Time{
+			netip.MustParsePrefix("10.0.0.1/32"): past(),
+		}, true)
+		n.manager = &NodeManager{releaseExcessIPs: true}
+		require.True(t, n.releaseNeeded())
+
+		n.waitingForPoolMaintenance = true
+		require.False(t, n.releaseNeeded())
+
+		n.waitingForPoolMaintenance = false
+		n.resyncNeeded = time.Now()
+		require.False(t, n.releaseNeeded())
+
+		n.updateLastResync(time.Now().Add(time.Second))
+		require.True(t, n.releaseNeeded())
 	})
 }

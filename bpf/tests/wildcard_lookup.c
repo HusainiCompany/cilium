@@ -8,13 +8,6 @@
 #define ENABLE_IPV4 1
 #define ENABLE_IPV6 1
 
-#define ENABLE_HOST_SERVICES_TCP 1
-#define ENABLE_SOCKET_LB_HOST_ONLY 1
-#define ENABLE_SOCKET_LB_TCP
-#define ENABLE_SOCKET_LB_UDP
-
-#define ENABLE_NODEPORT 1
-
 #define HOST_NETNS_COOKIE 42
 
 static __always_inline
@@ -33,8 +26,11 @@ __net_cookie test_get_netns_cookie(__maybe_unused void *ctx)
 /* Set port ranges to have deterministic source port selection */
 #include "nodeport_defaults.h"
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
 /* Hardcode the host netns cookie to 42 */
 ASSIGN_CONFIG(__u64, host_netns_cookie, HOST_NETNS_COOKIE)
+ASSIGN_CONFIG(struct socket_lb_config, socket_lb, { .hostns_only = true })
+ASSIGN_CONFIG(bool, enable_nodeport, true)
 
 enum {
 	NODEPORT_LOOKUP = 0,

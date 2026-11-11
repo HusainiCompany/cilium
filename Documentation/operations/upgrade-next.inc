@@ -21,6 +21,12 @@ notes carefully below to understand what to do during upgrade.
 * Cilium mutual authentication support has been removed after deprecation. If
   you use mutual authentication, remove that configuration before upgrading.
   Consider using :ref:`encryption_ztunnel` instead.
+* Egress policy rules that combine ``toServices`` with ``toPorts`` no longer
+  allow traffic to any destination on those ports when the referenced Service
+  doesn't exist or is selector-less with no backends. Such rules now deny that
+  traffic until the Service exists and, if selector-less, has backends. If you
+  have rules like this, ensure the referenced Services exist and have backends
+  before upgrading.
 
 Informational Notes
 ~~~~~~~~~~~~~~~~~~~
@@ -50,11 +56,26 @@ New Options
 
 The following options have been introduced in this version of Cilium:
 
+* The Prometheus container port names can now be configured via the Helm values
+  ``prometheus.portName``, ``operator.prometheus.portName``,
+  ``envoy.prometheus.portName``, ``hubble.metrics.portName``,
+  ``hubble.relay.prometheus.portName``,
+  ``clustermesh.apiserver.metrics.portName``,
+  ``clustermesh.apiserver.metrics.kvstoremesh.portName``, and
+  ``clustermesh.apiserver.metrics.etcd.portName``. These default to their existing
+  names and support custom scrape configurations that require specific named
+  ports.
 * ``CiliumPodIPPool`` gained the ``spec.ipv4.pool`` and ``spec.ipv6.pool``
   fields, which carry per-CIDR configuration. Each entry references a CIDR from
   ``cidrs`` and may set ``reservedRanges`` to exclude IP ranges from allocation.
   These fields are only available in ``cilium.io/v2``. See
   :ref:`update_existing_ciliumpodippools_with_reservedranges`.
+* The operator option ``--ipam-release-excess-ips`` (Helm value
+  ``ipam.operator.releaseExcessIPs``) enables releasing excess IP addresses for
+  AWS ENI, Azure and Alibaba Cloud IPAM. ``--excess-ip-release-delay`` (Helm
+  value ``ipam.operator.excessIPReleaseDelay``) now also applies to Alibaba
+  Cloud when release is enabled with ``--ipam-release-excess-ips``;
+  ``--alibaba-cloud-release-excess-ips`` keeps releasing without a delay.
 
 Changed Options
 ###############
@@ -62,7 +83,23 @@ Changed Options
 The following options have been modified in this version of Cilium to behave
 differently than in prior releases:
 
-* TODO
+* ``enable-remote-node-masquerade`` is now enabled by default with BPF
+  masquerading.
+* ``enable-remote-node-masquerade`` will now only masquerade traffic to
+  ExternalIP node addresses. Traffic to InternalIP node addresses will not be
+  masqueraded anymore.
+* ``bpf.hostLegacyRouting`` now defaults to true on new Cilium deployments.
+* ``bpf.masquerade`` is enabled by default on new Cilium deployments.
+* The SPIRE Helm values have moved from ``authentication.mutual.spire.*`` to
+  ``encryption.ztunnel.spire.*`` because mutual authentication has been removed
+  and SPIRE is now only used by ztunnel. The previous
+  ``authentication.mutual.spire.enabled`` switch has been removed. To use SPIRE
+  as the ztunnel CA backend, set ``encryption.enabled=true``,
+  ``encryption.type=ztunnel``, and ``encryption.ztunnel.ca.type=spire``. To use
+  an external SPIRE deployment instead of the chart-managed SPIRE resources, set
+  ``encryption.ztunnel.spire.install.enabled=false``. When reusing saved Helm
+  values, clear the old value with ``--set authentication.mutual.spire=null``
+  even if SPIRE was disabled, as the CLI may have saved affinity settings there.
 
 Deprecated Options
 ##################
@@ -82,6 +119,16 @@ you may need to take action to migrate to an alternative.
 
 * The agent option ``--fixed-identity-mapping`` is deprecated and will be removed
   in a future release.
+
+* The agent option ``--enable-xdp-prefilter`` is deprecated and will be removed
+  in a future release.
+
+* ``--aws-release-excess-ips``, ``--alibaba-cloud-release-excess-ips`` and the
+  Helm value ``eni.awsReleaseExcessIPs`` are deprecated in favor of
+  ``--ipam-release-excess-ips`` and ``ipam.operator.releaseExcessIPs``, and will
+  be removed in v1.22. ``eni.awsReleaseExcessIPs`` now renders
+  ``ipam-release-excess-ips``, so upgrade the chart and the operator image
+  together.
 
 Removed Options
 ###############
@@ -103,6 +150,17 @@ from Cilium.
 * The previously deprecated ``clustermesh.apiserver.kvstoremesh.enabled`` helm
   value has been removed, and KVStoreMesh is now unconditionally enabled when the
   clustermesh-apiserver is enabled.
+* The ``--tofqdns-pre-cache`` agent flag and the corresponding Helm value
+  ``dnsProxy.preCache`` have been removed. The pre-cache file was only ever
+  needed to carry DNS mappings across the v1.3 to v1.4 upgrade. Agents restore
+  their DNS cache from the persisted per-endpoint DNS history on restart, so no
+  replacement is required.
+* The hidden ``--bypass-ip-availability-upon-restore`` agent flag has been
+  removed. It was a temporary workaround for an ENI IPAM upgrade issue
+  introduced in v1.10, and has had no effect in ENI mode since the agent moved
+  to the multi-pool allocator in v1.20, nor in Azure mode with this release.
+* The deprecated ``cilium.io/v2alpha1`` API version of the BGP CRDs has been
+  removed. Use ``cilium.io/v2`` instead, which has been available since Cilium 1.18.
 
 Changes to Metrics
 ~~~~~~~~~~~~~~~~~~
@@ -110,7 +168,13 @@ Changes to Metrics
 Added Metrics
 #############
 
-* TODO
+* ``cilium_operator_ces_events_skipped_total`` has been added. It counts the
+  ``CiliumEndpointSlice`` watch events that did not trigger a reconciliation
+  because the CES already matched its desired state, for example when the
+  informer echoes the operator's own writes. The ``reason`` label is either
+  ``unchanged`` (an upsert event for a CES that already matches its desired
+  state) or ``unmapped`` (a delete event for a CES with no mapped
+  ``CiliumEndpoint``).
 
 Changed Metrics
 ###############

@@ -71,20 +71,20 @@ env:
   # capacity since GCE does not report it.
   gcp_zone: us-central1-a
   # renovate: datasource=docker depName=google/cloud-sdk
-  gcloud_version: 585.0.0
+  gcloud_version: 592.0.0
 
 jobs:
   echo-inputs:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     name: Echo Workflow Dispatch Inputs
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Echo Workflow Dispatch Inputs
         run: |
           echo '${{ tojson(inputs) }}'
   commit-status-start:
     name: Commit Status Start
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Set initial commit status
         uses: cilium/actions/set-commit-status@687b48a0547e534dd7270d5069a5ab7967c0e907 # main
@@ -93,7 +93,7 @@ jobs:
 
   wait-for-images:
     name: Wait for images
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - name: Checkout context ref (trusted)
@@ -114,7 +114,7 @@ jobs:
   installation-and-perf:
     name: Installation and Perf Test
     needs: wait-for-images
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     # Allow headroom for a zone fallback: a STOCKOUT can burn ~35m of
     # provisioning wait per zone before we retry in the next one (partial
     # clusters are torn down asynchronously, so a failed attempt adds little
@@ -162,8 +162,17 @@ jobs:
             mode: "tunnel"
             encryption: "wireguard"
 
+          - index: 7
+            name: "native-kpr"
+            mode: "gke"
+            kpr: "true"
+
     steps:
       - name: Set commit status to pending
+        # commit-status-start does not re-run, so this is only needed on a re-run. It's ok
+        # to continue on error since the check is reported at the end of the test.
+        if: ${{ github.run_attempt != '1' }}
+        continue-on-error: true
         uses: cilium/actions/set-commit-status@687b48a0547e534dd7270d5069a5ab7967c0e907 # main
         with:
           sha: ${{ inputs.SHA || github.sha }}
@@ -218,7 +227,10 @@ jobs:
             CILIUM_INSTALL_DEFAULTS+=" --helm-set=encryption.enabled=true --helm-set=encryption.type=wireguard"
           fi
 
-          CILIUM_INSTALL_DEFAULTS+=" ${{ env.CILIUM_INSTALL_NET_PERF_EXTRA_ARGS }}"
+          if [ "${{ matrix.kpr }}" = "true" ] ; then
+            CILIUM_INSTALL_DEFAULTS+=" --helm-set=kubeProxyReplacement=true --helm-set=bpf.hostLegacyRouting=false \
+              --helm-set=bandwidthManager.enabled=true --helm-set=hubble.enabled=false"
+          fi
 
           NODE_TAINTS="ignore-taint.cluster-autoscaler.kubernetes.io/cilium-agent-not-ready=true:NoExecute"
 
@@ -305,7 +317,7 @@ jobs:
             --docker-password="${{ secrets.DOCKER_READ_PASSWORD }}"
 
       - name: Install Cilium CLI
-        uses: cilium/cilium-cli@c5e42236c7d90bd50e7975ac587f77782666a0aa # v0.20.0
+        uses: cilium/cilium-cli@1ac7fa66909e3730ab3869c8ba7aa7d68f0197fd # v0.20.2
         with:
           skip-build: ${{ env.CILIUM_CLI_SKIP_BUILD }}
           image-repo: ${{ env.CILIUM_CLI_IMAGE_REPO }}
@@ -337,7 +349,7 @@ jobs:
         id: run-perf
         run: |
           mkdir output
-          cilium connectivity perf --duration=30s --host-net=true --pod-net=true --crr=true --report-dir=./output --unsafe-capture-kernel-profiles
+          cilium connectivity perf --duration=120s --host-net=true --pod-net=true --crr=true --report-dir=./output --unsafe-capture-kernel-profiles
           sudo chmod -R +r ./output
 
       - name: Run common post steps

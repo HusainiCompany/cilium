@@ -463,23 +463,19 @@ bool lb6_svc_is_loadbalancer(const struct lb6_service *svc __maybe_unused)
 }
 
 static __always_inline
-bool lb4_svc_is_nodeport(const struct lb4_service *svc __maybe_unused)
+bool lb4_svc_is_nodeport(const struct lb4_service *svc)
 {
-#ifdef ENABLE_NODEPORT
+	if (!NODEPORT_ENABLED)
+		return false;
 	return svc->flags & SVC_FLAG_NODEPORT;
-#else
-	return false;
-#endif /* ENABLE_NODEPORT */
 }
 
 static __always_inline
-bool lb6_svc_is_nodeport(const struct lb6_service *svc __maybe_unused)
+bool lb6_svc_is_nodeport(const struct lb6_service *svc)
 {
-#ifdef ENABLE_NODEPORT
+	if (!NODEPORT_ENABLED)
+		return false;
 	return svc->flags & SVC_FLAG_NODEPORT;
-#else
-	return false;
-#endif /* ENABLE_NODEPORT */
 }
 
 static __always_inline
@@ -584,13 +580,9 @@ bool lb6_svc_is_localredirect(const struct lb6_service *svc)
 }
 
 static __always_inline
-bool __lb4_svc_is_l7_loadbalancer(const struct lb4_service *svc __maybe_unused)
+bool __lb4_svc_is_l7_loadbalancer(const struct lb4_service *svc)
 {
-#ifdef ENABLE_L7_LB
-	return svc->flags2 & SVC_FLAG_L7_LOADBALANCER;
-#else
-	return false;
-#endif
+	return CONFIG(enable_l7_lb) && svc->flags2 & SVC_FLAG_L7_LOADBALANCER;
 }
 
 static __always_inline
@@ -600,24 +592,17 @@ bool lb4_svc_is_l7_punt_proxy(const struct lb4_service *svc __maybe_unused)
 }
 
 static __always_inline
-bool lb4_svc_is_l7_loadbalancer(const struct lb4_service *svc __maybe_unused)
+bool lb4_svc_is_l7_loadbalancer(const struct lb4_service *svc)
 {
-#ifdef ENABLE_L7_LB
 	/* Also test for l7_lb_proxy_port, since l7_lb_proxy_port == 0 is reserved. */
-	return __lb4_svc_is_l7_loadbalancer(svc) && svc->l7_lb_proxy_port > 0;
-#else
-	return false;
-#endif
+	return CONFIG(enable_l7_lb) && __lb4_svc_is_l7_loadbalancer(svc) &&
+	       svc->l7_lb_proxy_port > 0;
 }
 
 static __always_inline
-bool __lb6_svc_is_l7_loadbalancer(const struct lb6_service *svc __maybe_unused)
+bool __lb6_svc_is_l7_loadbalancer(const struct lb6_service *svc)
 {
-#ifdef ENABLE_L7_LB
-	return svc->flags2 & SVC_FLAG_L7_LOADBALANCER;
-#else
-	return false;
-#endif
+	return CONFIG(enable_l7_lb) && svc->flags2 & SVC_FLAG_L7_LOADBALANCER;
 }
 
 static __always_inline
@@ -629,12 +614,9 @@ bool lb6_svc_is_l7_punt_proxy(const struct lb6_service *svc __maybe_unused)
 static __always_inline
 bool lb6_svc_is_l7_loadbalancer(const struct lb6_service *svc __maybe_unused)
 {
-#ifdef ENABLE_L7_LB
 	/* Also test for l7_lb_proxy_port, since l7_lb_proxy_port == 0 is reserved. */
-	return __lb6_svc_is_l7_loadbalancer(svc) && svc->l7_lb_proxy_port > 0;
-#else
-	return false;
-#endif
+	return CONFIG(enable_l7_lb) &&
+	       __lb6_svc_is_l7_loadbalancer(svc) && svc->l7_lb_proxy_port > 0;
 }
 
 static __always_inline
@@ -676,15 +658,11 @@ bool lb6_svc_is_itp_local(const struct lb6_service *svc)
 static __always_inline bool
 lb_svc_uses_dsr(bool flip __maybe_unused)
 {
-#ifdef ENABLE_DSR
-# ifdef ENABLE_DSR_BYUSER
-	return flip;
-# else
+	if (!CONFIG(dsr_cfg).enable)
+		return false;
+	if (CONFIG(dsr_cfg).enable_by_user)
+		return flip;
 	return true;
-# endif
-#else
-	return false;
-#endif
 }
 
 static __always_inline bool
@@ -790,10 +768,9 @@ static __always_inline __u32 lb_default_algorithm(void)
 #ifdef ENABLE_IPV6
 static __always_inline int
 ipv6_l4_csum_update(struct __ctx_buff *ctx, int l4_off, union v6addr *old_addr,
-		    const union v6addr *new_addr, struct csum_offset *csum_off,
-		    enum ct_dir dir)
+		    const union v6addr *new_addr, struct csum_offset *csum_off)
 {
-	int flag = 0, ret;
+	int ret;
 	__be32 sum;
 
 	sum = csum_diff(old_addr->addr, 16, new_addr->addr, 16, 0);
@@ -808,25 +785,33 @@ ipv6_l4_csum_update(struct __ctx_buff *ctx, int l4_off, union v6addr *old_addr,
 		return ret;
 
 	/* We need this to workaround a bug in bpf_l4_csum_replace's usage of
-	 * inet_proto_csum_replace_by_diff. In short, for IPv6 we don't want to
-	 * update skb->csum when CHECKSUM_COMPLETE (for the reason explained above
-	 * inet_proto_csum_replace16). Unfortunately,
-	 * inet_proto_csum_replace_by_diff does update skb->csum in that case. So
-	 * we don't set BPF_F_PSEUDO_HDR to work around that.
-	 * On egress, however, we might be in CHECKSUM_PARTIAL state, in which
-	 * case we need to set BPF_F_PSEUDO_HDR or the L4 checksum won't be
-	 * updated.
+	 * inet_proto_csum_replace_by_diff on kernels < 6.12. In short, for IPv6
+	 * we don't want to update skb->csum when CHECKSUM_COMPLETE (for the
+	 * reason explained above inet_proto_csum_replace16). Unfortunately,
+	 * inet_proto_csum_replace_by_diff subtracts sum from skb->csum in that
+	 * case when BPF_F_PSEUDO_HDR is set, while omitting BPF_F_PSEUDO_HDR
+	 * skips updating the L4 header checksum when CHECKSUM_PARTIAL.
+	 *
+	 * Pass BPF_F_PSEUDO_HDR so the L4 header checksum is always updated,
+	 * and call csum_update(ctx, sum) to add sum back to skb->csum.
+	 * bpf_csum_update() only modifies skb->csum when skb->ip_summed ==
+	 * CHECKSUM_COMPLETE; when skb->ip_summed == CHECKSUM_PARTIAL (where
+	 * the sk_buff union holds csum_start/csum_offset instead of skb->csum,
+	 * and the pseudo-header seed in the L4 header was already updated by
+	 * csum_l4_replace) or CHECKSUM_NONE/CHECKSUM_UNNECESSARY,
+	 * bpf_csum_update() is a no-op and returns -ENOTSUPP.
 	 */
-	if (dir == CT_EGRESS)
-		flag = BPF_F_PSEUDO_HDR;
+	ret = csum_l4_replace(ctx, l4_off, csum_off, 0, sum, BPF_F_PSEUDO_HDR);
+	if (!ret)
+		csum_update(ctx, sum);
 
-	return csum_l4_replace(ctx, l4_off, csum_off, 0, sum, flag);
+	return ret;
 }
 
 static __always_inline int __lb6_rev_nat(struct __ctx_buff *ctx, int l4_off,
 					 struct ipv6_ct_tuple *tuple,
 					 const struct lb6_reverse_nat *nat,
-					 bool has_l4_header, enum ct_dir dir,
+					 bool has_l4_header,
 					 bool loopback __maybe_unused)
 {
 	union v6addr old_saddr __align_stack_8;
@@ -858,7 +843,7 @@ static __always_inline int __lb6_rev_nat(struct __ctx_buff *ctx, int l4_off,
 
 			if (csum_off.offset &&
 			    ipv6_l4_csum_update(ctx, l4_off, &old_daddr, &old_saddr,
-						&csum_off, dir) < 0)
+						&csum_off) < 0)
 				return DROP_CSUM_L4;
 		}
 	}
@@ -882,7 +867,7 @@ static __always_inline int __lb6_rev_nat(struct __ctx_buff *ctx, int l4_off,
 
 		if (csum_off.offset &&
 		    ipv6_l4_csum_update(ctx, l4_off, &old_saddr, &nat->address,
-					&csum_off, dir) < 0)
+					&csum_off) < 0)
 			return DROP_CSUM_L4;
 	}
 
@@ -906,14 +891,12 @@ lb6_lookup_rev_nat_entry(const struct __ctx_buff *ctx __maybe_unused, __u16 inde
  * @arg loopback	loopback connection
  * @arg tuple		tuple
  * @arg has_l4_header	packet has L4 header
- * @arg dir		connection direction
  */
 static __always_inline int lb6_rev_nat(struct __ctx_buff *ctx, int l4_off,
 				       __u16 rev_nat_index,
 				       const union v6addr *nat_addr, __be16 nat_port,
 				       bool loopback,
-				       struct ipv6_ct_tuple *tuple, bool has_l4_header,
-				       enum ct_dir dir)
+				       struct ipv6_ct_tuple *tuple, bool has_l4_header)
 {
 	struct lb6_reverse_nat nat_info;
 	const struct lb6_reverse_nat *nat = NULL;
@@ -930,7 +913,7 @@ static __always_inline int lb6_rev_nat(struct __ctx_buff *ctx, int l4_off,
 			return 0;
 	}
 
-	return __lb6_rev_nat(ctx, l4_off, tuple, nat, has_l4_header, dir, loopback);
+	return __lb6_rev_nat(ctx, l4_off, tuple, nat, has_l4_header, loopback);
 }
 
 static __always_inline void
@@ -1002,13 +985,12 @@ bool lb6_src_range_ok(const struct lb6_service *svc __maybe_unused,
 }
 
 static __always_inline bool
-lb6_to_lb4_service(const struct lb6_service *svc __maybe_unused)
+lb6_to_lb4_service(const struct lb6_service *svc)
 {
-#ifdef ENABLE_NAT_46X64
+	if (!CONFIG(enable_nat_46x64))
+		return false;
+
 	return svc->flags2 & SVC_FLAG_NAT_46X64;
-#else
-	return false;
-#endif
 }
 
 static __always_inline const struct lb6_service *
@@ -1081,9 +1063,11 @@ lb6_lookup_service(struct lb6_key *key, const bool east_west)
 
 /* lb6_lookup_wildcard_service - see lb4_lookup_wildcard_service. */
 static __always_inline const struct lb6_service *
-lb6_lookup_wildcard_service(struct lb6_key *key __maybe_unused)
+lb6_lookup_wildcard_service(struct lb6_key *key)
 {
-#ifdef ENABLE_NODEPORT
+	if (!NODEPORT_ENABLED)
+		return NULL;
+
 	const struct remote_endpoint_info *info;
 	bool in_nodeport_range;
 	__u16 service_port;
@@ -1123,7 +1107,6 @@ lb6_lookup_wildcard_service(struct lb6_key *key __maybe_unused)
 
 		return svc;
 	}
-#endif
 
 	return NULL;
 }
@@ -1412,19 +1395,17 @@ lb6_update_affinity_by_netns(const struct lb6_service *svc __maybe_unused,
 }
 
 static __always_inline int
-lb6_to_lb4(struct __ctx_buff *ctx __maybe_unused,
-	   const struct ipv6hdr *ip6 __maybe_unused)
+lb6_to_lb4(struct __ctx_buff *ctx, const struct ipv6hdr *ip6)
 {
-#ifdef ENABLE_NAT_46X64
 	__be32 src4, dst4;
+
+	if (!CONFIG(enable_nat_46x64))
+		return DROP_NAT_46X64_DISABLED;
 
 	build_v4_from_v6((const union v6addr *)&ip6->saddr, &src4);
 	build_v4_from_v6((const union v6addr *)&ip6->daddr, &dst4);
 
 	return ipv6_to_ipv4(ctx, src4, dst4);
-#else
-	return DROP_NAT_46X64_DISABLED;
-#endif
 }
 
 static __always_inline int lb6_local(const void *map, struct __ctx_buff *ctx,
@@ -1646,7 +1627,6 @@ lb6_to_lb4_service(const struct lb6_service *svc __maybe_unused)
 }
 #endif /* ENABLE_IPV6 */
 
-#ifdef ENABLE_IPV4
 static __always_inline int __lb4_rev_nat(struct __ctx_buff *ctx, int l3_off, int l4_off,
 					 struct ipv4_ct_tuple *tuple,
 					 const struct lb4_reverse_nat *nat,
@@ -1826,13 +1806,12 @@ bool lb4_src_range_ok(const struct lb4_service *svc __maybe_unused,
 }
 
 static __always_inline bool
-lb4_to_lb6_service(const struct lb4_service *svc __maybe_unused)
+lb4_to_lb6_service(const struct lb4_service *svc)
 {
-#ifdef ENABLE_NAT_46X64
+	if (!CONFIG(enable_nat_46x64))
+		return false;
+
 	return svc->flags2 & SVC_FLAG_NAT_46X64;
-#else
-	return false;
-#endif
 }
 
 static __always_inline const struct lb4_service *
@@ -1916,9 +1895,11 @@ lb4_lookup_service(struct lb4_key *key, const bool east_west)
  * On match, zeros the address in @key and performs a wildcard service lookup.
  */
 static __always_inline const struct lb4_service *
-lb4_lookup_wildcard_service(struct lb4_key *key __maybe_unused)
+lb4_lookup_wildcard_service(struct lb4_key *key)
 {
-#ifdef ENABLE_NODEPORT
+	if (!NODEPORT_ENABLED)
+		return NULL;
+
 	const struct remote_endpoint_info *info;
 	bool in_nodeport_range;
 	__u16 service_port;
@@ -1962,7 +1943,6 @@ lb4_lookup_wildcard_service(struct lb4_key *key __maybe_unused)
 
 		return svc;
 	}
-#endif
 
 	return NULL;
 }
@@ -2256,20 +2236,17 @@ lb4_update_affinity_by_netns(const struct lb4_service *svc __maybe_unused,
 }
 
 static __always_inline int
-lb4_to_lb6(struct __ctx_buff *ctx __maybe_unused,
-	   const struct iphdr *ip4 __maybe_unused,
-	   int l3_off __maybe_unused)
+lb4_to_lb6(struct __ctx_buff *ctx, const struct iphdr *ip4, int l3_off)
 {
-#ifdef ENABLE_NAT_46X64
 	union v6addr src6, dst6;
+
+	if (!CONFIG(enable_nat_46x64))
+		return DROP_NAT_46X64_DISABLED;
 
 	build_v4_in_v6(&src6, ip4->saddr);
 	build_v4_in_v6(&dst6, ip4->daddr);
 
 	return ipv4_to_ipv6(ctx, l3_off, &src6, &dst6);
-#else
-	return DROP_NAT_46X64_DISABLED;
-#endif
 }
 
 static __always_inline int lb4_local(const void *map, struct __ctx_buff *ctx,
@@ -2462,7 +2439,6 @@ lb4_dnat_request(struct __ctx_buff *ctx, const struct lb4_backend *backend,
 			 tuple->nexthdr, l3_off, l4_off, daddr, dport,
 			 backend, ipfrag_has_l4_header(fraginfo));
 }
-#endif /* ENABLE_IPV4 */
 
 DECLARE_CONFIG(bool,
 	       enable_service_no_backend_response,
@@ -2471,7 +2447,6 @@ DECLARE_CONFIG(bool,
 /* Because we use tail calls and this file is included in bpf_sock.h */
 #ifndef SKIP_CALLS_MAP
 
-#ifdef ENABLE_IPV4
 __declare_tail(CILIUM_CALL_IPV4_NO_SERVICE)
 int tail_no_service_ipv4(struct __ctx_buff *ctx)
 {
@@ -2492,7 +2467,6 @@ int tail_no_service_ipv4(struct __ctx_buff *ctx)
 
 	return ret;
 }
-#endif /* ENABLE_IPV4 */
 
 #ifdef ENABLE_IPV6
 __declare_tail(CILIUM_CALL_IPV6_NO_SERVICE)

@@ -6,17 +6,16 @@
 #include "common.h"
 #include "pktgen.h"
 
-#define ENABLE_IPV4
-#define ENABLE_NODEPORT
+#define ENABLE_IPV4 1
 #include <bpf/config/global.h>
 #include <bpf/config/node.h>
 
-#define DEBUG
+ASSIGN_CONFIG(bool, debug, true)
 
 /* Flags for this test case: Remote Node Masquerade DISABLED */
 /* Note: Remote node masquerade is configured via ASSIGN_CONFIG below */
 #define ENABLE_BPF_MASQUERADE 1
-#define ENABLE_MASQUERADE_IPV4 1
+ASSIGN_CONFIG(bool, enable_masquerade_ipv4, true)
 #define IS_BPF_HOST 1
 /* For this test, ensure TUNNEL_MODE is also not defined to hit NAT_PUNT_TO_STACK */
 /* #undef TUNNEL_MODE (implicitly undefined) */
@@ -33,12 +32,14 @@
 /* Include necessary headers to get configuration declarations */
 #include <lib/nat.h>
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
 /* Configure the test with proper values for disabled remote node masquerade */
 ASSIGN_CONFIG(union v4addr, nat_ipv4_masquerade, { .be32 = IPV4_MASQUERADE })
 ASSIGN_CONFIG(bool, enable_remote_node_masquerade, false)
 ASSIGN_CONFIG(__u32, trace_payload_len, 128UL)
 ASSIGN_CONFIG(bool, enable_extended_ip_protocols, false)
 ASSIGN_CONFIG(bool, enable_sctp, true)
+ASSIGN_CONFIG(bool, enable_nodeport, true)
 
 #include "lib/ipcache.h"
 

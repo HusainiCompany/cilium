@@ -9,7 +9,7 @@ on:
 jobs:
   validate:
     name: Validate Renovate configuration
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
     steps:
@@ -20,7 +20,7 @@ jobs:
       - name: Validate configuration
         run: |
           # renovate: datasource=docker
-          export RENOVATE_IMAGE=ghcr.io/renovatebot/renovate:44.104.0@sha256:095c8a7ab1b087d58da0d74250b7941b43863273cda8c7a8f9b5d21ad8ee953d
+          export RENOVATE_IMAGE=ghcr.io/renovatebot/renovate:44.222.4@sha256:306316fc9e8c424dde672590699d681f9c8764cc9152141d2c5059956ce1e3b8
           docker run --rm --entrypoint "renovate-config-validator" \
             -v "${{ github.workspace }}/.github/renovate.json5":"/renovate.json5" \
             ${RENOVATE_IMAGE} --strict "/renovate.json5"

@@ -24,6 +24,7 @@ import (
 )
 
 type KubernetesClient interface {
+	GetServerPreferredResources(ctx context.Context) ([]*metav1.APIResourceList, error)
 	AutodetectFlavor(ctx context.Context) k8s.Flavor
 	CopyFromPod(ctx context.Context, namespace, pod, container, fromFile, destFile string, retryLimit int) error
 	CreateEphemeralContainer(ctx context.Context, pod *corev1.Pod, ec *corev1.EphemeralContainer) (*corev1.Pod, error)
@@ -49,11 +50,6 @@ type KubernetesClient interface {
 	GetVersion(ctx context.Context) (string, error)
 	GetHelmMetadata(ctx context.Context, releaseName string, namespace string) (string, error)
 	GetHelmValues(ctx context.Context, releaseName string, namespace string) (string, error)
-	ListCiliumBGPClusterConfigs(ctx context.Context, opts metav1.ListOptions) (*ciliumv2alpha1.CiliumBGPClusterConfigList, error)
-	ListCiliumBGPPeerConfigs(ctx context.Context, opts metav1.ListOptions) (*ciliumv2alpha1.CiliumBGPPeerConfigList, error)
-	ListCiliumBGPAdvertisements(ctx context.Context, opts metav1.ListOptions) (*ciliumv2alpha1.CiliumBGPAdvertisementList, error)
-	ListCiliumBGPNodeConfigs(ctx context.Context, opts metav1.ListOptions) (*ciliumv2alpha1.CiliumBGPNodeConfigList, error)
-	ListCiliumBGPNodeConfigOverrides(ctx context.Context, opts metav1.ListOptions) (*ciliumv2alpha1.CiliumBGPNodeConfigOverrideList, error)
 	ListCiliumCIDRGroups(ctx context.Context, opts metav1.ListOptions) (*ciliumv2alpha1.CiliumCIDRGroupList, error)
 	ListCiliumClusterwideNetworkPolicies(ctx context.Context, opts metav1.ListOptions) (*ciliumv2.CiliumClusterwideNetworkPolicyList, error)
 	ListCiliumClusterwideEnvoyConfigs(ctx context.Context, opts metav1.ListOptions) (*ciliumv2.CiliumClusterwideEnvoyConfigList, error)

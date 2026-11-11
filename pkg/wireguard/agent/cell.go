@@ -33,13 +33,8 @@ func newWireguardAgent(p params) (out struct {
 	defines.NodeOut
 }) {
 	out.Agent = newAgent(p)
-	if out.Agent.Enabled() {
-		out.NodeDefines = map[string]string{
-			"ENABLE_WIREGUARD": "1",
-		}
-		if p.Config.EncryptNode {
-			out.NodeDefines["ENABLE_NODE_ENCRYPTION"] = "1"
-		}
+	if out.Agent.Enabled() && p.Config.EncryptNode {
+		out.NodeDefines["ENABLE_NODE_ENCRYPTION"] = "1"
 	}
 	return
 }
@@ -54,12 +49,13 @@ func buildConfigFrom(uc UserConfig, dc *option.DaemonConfig, tunnelConfig tunnel
 	return Config{
 		UserConfig: uc,
 
-		StateDir:         dc.StateDir,
-		EnableIPv4:       dc.EnableIPv4,
-		EnableIPv6:       dc.EnableIPv6,
-		TunnelingEnabled: dc.TunnelingEnabled(),
-		EncryptNode:      dc.EncryptNode,
-		UnderlayProtocol: tunnelConfig.UnderlayProtocol(),
+		StateDir:              dc.StateDir,
+		EnableIPv4:            dc.EnableIPv4,
+		EnableIPv6:            dc.EnableIPv6,
+		TunnelingEnabled:      dc.TunnelingEnabled(),
+		RequiresNativeRouting: dc.RequiresNativeRouting(),
+		EncryptNode:           dc.EncryptNode,
+		UnderlayProtocol:      tunnelConfig.UnderlayProtocol(),
 	}
 }
 
@@ -91,12 +87,13 @@ func (def UserConfig) Flags(flags *pflag.FlagSet) {
 type Config struct {
 	UserConfig
 
-	StateDir         string
-	EnableIPv4       bool
-	EnableIPv6       bool
-	TunnelingEnabled bool
-	EncryptNode      bool
-	UnderlayProtocol tunnel.UnderlayProtocol
+	StateDir              string
+	EnableIPv4            bool
+	EnableIPv6            bool
+	TunnelingEnabled      bool
+	RequiresNativeRouting bool
+	EncryptNode           bool
+	UnderlayProtocol      tunnel.UnderlayProtocol
 }
 
 var defaultEnableConfig = EnableConfig{

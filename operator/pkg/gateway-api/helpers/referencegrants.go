@@ -18,6 +18,14 @@ func IsBackendReferenceAllowed(originatingNamespace string, be gatewayv1.Backend
 	if IsServiceImport(be.BackendObjectReference) {
 		return IsReferenceAllowed(originatingNamespace, string(be.Name), be.Namespace, gvk, mcsapiv1beta1.SchemeGroupVersion.WithKind("ServiceImport"), grants)
 	}
+	if IsInferencePool(be.BackendObjectReference) {
+		// Cross reference ns for InferencePools are currently not allowed. Check if the ns is the same
+		// https://github.com/kubernetes-sigs/gateway-api-inference-extension/issues/113
+		ns := NamespaceDerefOr(be.Namespace, originatingNamespace)
+		if originatingNamespace == ns {
+			return true
+		}
+	}
 
 	return false
 }
@@ -53,4 +61,9 @@ func IsReferenceAllowed(originatingNamespace, name string, namespace *gatewayv1.
 		}
 	}
 	return false
+}
+
+// IsObjectRefAllowed returns true if the object reference is allowed by the reference grant.
+func IsObjectRefAllowed(originatingNamespace string, ref gatewayv1.ObjectReference, fromGVK, toGVK schema.GroupVersionKind, grants []gatewayv1.ReferenceGrant) bool {
+	return IsReferenceAllowed(originatingNamespace, string(ref.Name), ref.Namespace, fromGVK, toGVK, grants)
 }

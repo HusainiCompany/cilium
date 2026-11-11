@@ -33,14 +33,21 @@
 #endif
 
 #if defined(ENABLE_EGRESS_GATEWAY)
-#define ENABLE_EGRESS_GATEWAY_COMMON
+#define ENABLE_EGRESS_GATEWAY_COMMON 1
 #endif
 
-#if defined(ENCAP_IFINDEX) || defined(ENABLE_EGRESS_GATEWAY_COMMON) || \
-    (defined(ENABLE_DSR) && DSR_ENCAP_MODE == DSR_ENCAP_GENEVE)
-#define HAVE_ENCAP	1
-
+#ifndef DSR_ENCAP_MODE
+#define DSR_ENCAP_MODE DSR_ENCAP_INVALID
 #endif
+
+#ifndef ENCAP_IFINDEX
+#define ENCAP_IFINDEX 0
+#endif
+
+/* TUNNEL_MODE needs the encapsulation helpers guarded by HAVE_ENCAP. */
+#define HAVE_ENCAP ((ENCAP_IFINDEX != 0) || is_defined(ENABLE_EGRESS_GATEWAY_COMMON) || \
+	is_defined(TUNNEL_MODE) || \
+	(DSR_ENCAP_MODE == DSR_ENCAP_GENEVE))
 
 /* XFER_FLAGS that get transferred from XDP to SKB */
 enum {
@@ -352,21 +359,6 @@ struct lb4_reverse_nat {
 	__be32 address;
 	__be16 port;
 } __packed;
-
-struct lpm_v4_key {
-	struct bpf_lpm_trie_key lpm;
-	__u8 addr[4];
-};
-
-struct lpm_v6_key {
-	struct bpf_lpm_trie_key lpm;
-	__u8 addr[16];
-};
-
-struct lpm_val {
-	/* Just dummy for now. */
-	__u8 flags;
-};
 
 /* Older kernels don't support the larger tunnel key structure and we don't
  * need it since we only want to retrieve the tunnel ID anyway.

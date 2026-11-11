@@ -9,10 +9,6 @@
 /* Enable code paths under test */
 #define ENABLE_IPV4			1
 #define ENABLE_IPV6			1
-#define ENABLE_NODEPORT			1
-#define ENABLE_NODEPORT_ACCELERATION	1
-#define ENABLE_DSR			1
-#define DSR_ENCAP_IPIP			2
 #define DSR_ENCAP_MODE			DSR_ENCAP_IPIP
 
 #define CLIENT_IP		v4_ext_one
@@ -48,6 +44,11 @@ ASSIGN_CONFIG(union v6addr, ipv6_rss_prefix, LB_IPV6)
 
 ASSIGN_CONFIG(union v4addr, ipv4_direct_routing, { .be32 = LB_IP })
 ASSIGN_CONFIG(union v6addr, ipv6_direct_routing, LB_IPV6)
+ASSIGN_CONFIG(struct dsr_config, dsr_cfg, { .enable = true })
+
+ASSIGN_CONFIG(bool, enable_ipv4, true)
+ASSIGN_CONFIG(bool, enable_nodeport_acceleration, true)
+ASSIGN_CONFIG(bool, enable_nodeport, true)
 
 long mock_fib_lookup(__maybe_unused void *ctx, struct bpf_fib_lookup *params,
 		     __maybe_unused int plen, __maybe_unused __u32 flags)

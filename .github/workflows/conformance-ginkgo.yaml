@@ -96,7 +96,7 @@ jobs:
   echo-inputs:
     if: ${{ github.event_name == 'workflow_dispatch' }}
     name: Echo Workflow Dispatch Inputs
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Echo Workflow Dispatch Inputs
         run: |
@@ -104,7 +104,7 @@ jobs:
 
   setup-vars:
     name: Setup Vars
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       SHA: ${{ steps.vars.outputs.SHA }}
       context-ref: ${{ steps.vars.outputs.context-ref }}
@@ -140,7 +140,7 @@ jobs:
 
   commit-status-start:
     name: Commit Status Start
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - name: Set initial commit status
         uses: cilium/actions/set-commit-status@687b48a0547e534dd7270d5069a5ab7967c0e907 # main
@@ -150,7 +150,7 @@ jobs:
   # Pre-build the ginkgo binary so that we don't have to build it for all
   # runners.
   build-ginkgo-binary:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     name: Build Ginkgo E2E
     timeout-minutes: 30
     outputs:
@@ -188,7 +188,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # renovate: datasource=golang-version depName=go
-          go-version: 1.27.1
+          go-version: 1.27.3
 
       - name: Build Ginkgo
         if: ${{ steps.cache.outputs.cache-hit != 'true' }}
@@ -218,7 +218,7 @@ jobs:
 
   wait-for-images:
     needs: setup-vars
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     name: Wait for images
     timeout-minutes: 30
     steps:
@@ -243,7 +243,7 @@ jobs:
   generate-matrix:
     name: Generate Job Matrix from YAMLs
     needs: setup-vars
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
@@ -314,7 +314,7 @@ jobs:
   lvh-cache-key:
     name: LVH Cache Key
     # Same runner as the legs, so the key describes the packages they install.
-    runs-on: ${{ vars.GH_RUNNER_EXTRA_POWER_UBUNTU_LATEST || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.UBUNTU_2604_4CPU_16GB || 'ubuntu-26.04' }}
     timeout-minutes: 20
     outputs:
       dependency-list-sha: ${{ steps.key.outputs.dependency_list_sha }}
@@ -323,13 +323,13 @@ jobs:
         id: key
         timeout-minutes: 10
         continue-on-error: true
-        uses: cilium/little-vm-helper@f86d344aca812dda5aef167867a9a0a90ca6cca5 # v0.0.31
+        uses: cilium/little-vm-helper@c8b0bfbae3bdda7bc69fb9cd370e4b74ce84986d # v0.0.33
         with:
           derive-dependency-list-sha: 'true'
 
   setup-and-test:
     needs: [setup-vars, build-ginkgo-binary, generate-matrix, wait-for-images, lvh-cache-key]
-    runs-on: ${{ vars.GH_RUNNER_EXTRA_POWER_UBUNTU_LATEST || 'ubuntu-24.04' }}
+    runs-on: ${{ vars.UBUNTU_2604_4CPU_16GB || 'ubuntu-26.04' }}
     timeout-minutes: 45
     name: "E2E Test (${{ matrix.k8s-version }}, ${{matrix.focus}})"
     env:
@@ -341,6 +341,10 @@ jobs:
 
     steps:
       - name: Set commit status to pending
+        # commit-status-start does not re-run, so this is only needed on a re-run. It's ok
+        # to continue on error since the check is reported at the end of the test.
+        if: ${{ github.run_attempt != '1' }}
+        continue-on-error: true
         uses: cilium/actions/set-commit-status@687b48a0547e534dd7270d5069a5ab7967c0e907 # main
         with:
           sha: ${{ inputs.SHA || github.sha }}
@@ -364,7 +368,7 @@ jobs:
 
       - name: Login to docker registry for CI image pull
         if: ${{ vars.DOCKER_AUTH_REQUIRED == 'true' }}
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ${{ vars.DOCKER_READ_HOST }}
           username: ${{ vars.DOCKER_READ_USERNAME }}
@@ -382,7 +386,7 @@ jobs:
           path: untrusted
 
       - name: Install cilium-cli
-        uses: cilium/cilium-cli@c5e42236c7d90bd50e7975ac587f77782666a0aa # v0.20.0
+        uses: cilium/cilium-cli@1ac7fa66909e3730ab3869c8ba7aa7d68f0197fd # v0.20.2
         with:
           skip-build: ${{ env.CILIUM_CLI_SKIP_BUILD }}
           image-repo: ${{ env.CILIUM_CLI_IMAGE_REPO }}
@@ -415,18 +419,18 @@ jobs:
 
       - name: Provision LVH VMs
         id: provision-vh-vms
-        uses: cilium/little-vm-helper@f86d344aca812dda5aef167867a9a0a90ca6cca5 # v0.0.31
+        uses: cilium/little-vm-helper@c8b0bfbae3bdda7bc69fb9cd370e4b74ce84986d # v0.0.33
         with:
           test-name: datapath-conformance
           install-dependencies: true
           dependency-list-sha: ${{ needs.lvh-cache-key.outputs.dependency-list-sha }}
           image-version: ${{ matrix.kernel }}
-          images-folder-parent: "/tmp"
+          images-folder-parent: "/var/tmp"
           host-mount: untrusted/
           cpu: 4
           mem: 12G
           # renovate: datasource=github-tags depName=cilium/little-vm-helper
-          lvh-version: "v0.0.31"
+          lvh-version: "v0.0.33"
           cmd: |
             git config --global --add safe.directory /host
             mv /host/helm /usr/bin
@@ -434,7 +438,7 @@ jobs:
 
       - name: Provision kind
         timeout-minutes: 5
-        uses: cilium/little-vm-helper@f86d344aca812dda5aef167867a9a0a90ca6cca5 # v0.0.31
+        uses: cilium/little-vm-helper@c8b0bfbae3bdda7bc69fb9cd370e4b74ce84986d # v0.0.33
         with:
           provision: 'false'
           cmd: |
@@ -451,7 +455,7 @@ jobs:
 
       - name: Create imagePullSecret for ginkgo image pull
         if: ${{ vars.DOCKER_AUTH_REQUIRED == 'true' }}
-        uses: cilium/little-vm-helper@f86d344aca812dda5aef167867a9a0a90ca6cca5 # v0.0.31
+        uses: cilium/little-vm-helper@c8b0bfbae3bdda7bc69fb9cd370e4b74ce84986d # v0.0.33
         with:
           provision: 'false'
           cmd: |
@@ -475,7 +479,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # renovate: datasource=golang-version depName=go
-          go-version: 1.27.1
+          go-version: 1.27.3
 
       - name: Build Ginkgo
         if: ${{ steps.cache.outputs.cache-hit != 'true' }}
@@ -512,7 +516,7 @@ jobs:
       - name: Run tests
         id: run-tests
         timeout-minutes: 40
-        uses: cilium/little-vm-helper@f86d344aca812dda5aef167867a9a0a90ca6cca5 # v0.0.31
+        uses: cilium/little-vm-helper@c8b0bfbae3bdda7bc69fb9cd370e4b74ce84986d # v0.0.33
         with:
           provision: 'false'
           cmd: |
@@ -544,8 +548,8 @@ jobs:
             HELM_OVERRIDES="${{ env.HELM_OVERRIDES }}"
             # Only pass the imagePullSecrets helm override when registry auth is required.
             if [[ "${{ vars.DOCKER_AUTH_REQUIRED }}" == "true" ]]; then
-              if [[ -n "${HELM_OVERRIDES}" ]]; then
-                HELM_OVERRIDES="${HELM_OVERRIDES},imagePullSecrets[0].name=cilium-registry"
+              if [[ -n "\${HELM_OVERRIDES}" ]]; then
+                HELM_OVERRIDES="\${HELM_OVERRIDES},imagePullSecrets[0].name=cilium-registry"
               else
                 HELM_OVERRIDES="-cilium.install-helm-overrides=imagePullSecrets[0].name=cilium-registry"
               fi
@@ -562,7 +566,7 @@ jobs:
              -cilium.hubble-relay-image=${{ env.REGISTRY_DEV }}/${{ env.ORGANIZATION_DEV }}/hubble-relay-ci \
              -cilium.hubble-relay-tag=${{ needs.setup-vars.outputs.SHA }}${{ needs.setup-vars.outputs.image_tag_suffix }} \
              -cilium.kubeconfig=/root/.kube/config \
-             ${HELM_OVERRIDES} \
+             \${HELM_OVERRIDES} \
              -cilium.operator-suffix=-ci"
 
               ./test.test \
@@ -577,12 +581,12 @@ jobs:
                -cilium.hubble-relay-image=${{ env.REGISTRY_DEV }}/${{ env.ORGANIZATION_DEV }}/hubble-relay-ci \
                -cilium.hubble-relay-tag=${{ needs.setup-vars.outputs.SHA }}${{ needs.setup-vars.outputs.image_tag_suffix }} \
                -cilium.kubeconfig=/root/.kube/config \
-               ${HELM_OVERRIDES} \
+               \${HELM_OVERRIDES} \
                -cilium.operator-suffix=-ci
 
       - name: Fetch artifacts
         if: ${{ !success() && steps.provision-vh-vms.outcome == 'success' }}
-        uses: cilium/little-vm-helper@f86d344aca812dda5aef167867a9a0a90ca6cca5 # v0.0.31
+        uses: cilium/little-vm-helper@c8b0bfbae3bdda7bc69fb9cd370e4b74ce84986d # v0.0.33
         with:
           provision: 'false'
           cmd: |
@@ -625,7 +629,7 @@ jobs:
 
       - name: Upload feature status error logs
         if: ${{ always() && steps.run-tests.outcome != 'skipped' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: feature-status-errors-${{ env.job_name }}
           path: untrusted/feature-status-errors/*.log
@@ -642,7 +646,7 @@ jobs:
 
       - name: Upload artifacts
         if: ${{ !success() && steps.provision-vh-vms.outcome == 'success' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cilium-sysdumps-${{ matrix.k8s-version }}-${{matrix.focus}}
           # The tarball is written under the host-mounted 'untrusted/' dir.

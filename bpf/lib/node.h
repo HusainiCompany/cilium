@@ -22,7 +22,8 @@ struct node_key {
 struct node_value {
 	__u16 id;
 	__u8  spi;
-	__u8  pad;
+	__u8  internalip:1,
+	      reserved:7;
 };
 
 struct {
@@ -58,7 +59,17 @@ lookup_ip4_node_id(__be32 ip4)
 	return node_value->id;
 }
 
-# ifdef ENABLE_IPV6
+static __always_inline bool
+is_internal_node_ip(__be32 ip4)
+{
+	const struct node_value *node_value;
+
+	node_value = lookup_ip4_node(ip4);
+	if (!node_value)
+		return false;
+	return node_value->internalip;
+}
+
 static __always_inline const struct node_value *
 lookup_ip6_node(const union v6addr *ip6)
 {
@@ -82,14 +93,22 @@ lookup_ip6_node_id(const union v6addr *ip6)
 		return 0;
 	return node_value->id;
 }
-# endif /* ENABLE_IPV6 */
+
+static __always_inline __u16
+is_internal_node_ip6(const union v6addr *ip6)
+{
+	const struct node_value *node_value;
+
+	node_value = lookup_ip6_node(ip6);
+	if (!node_value)
+		return false;
+	return node_value->internalip;
+}
 
 static __always_inline const struct node_value *
 lookup_node(const struct remote_endpoint_info *info)
 {
-# ifdef ENABLE_IPV6
-	if (info->flag_ipv6_tunnel_ep)
+	if (is_defined(ENABLE_IPV6) && info->flag_ipv6_tunnel_ep)
 		return lookup_ip6_node(&info->tunnel_endpoint.ip6);
-# endif /* ENABLE_IPV6 */
 	return lookup_ip4_node(info->tunnel_endpoint.ip4.be32);
 }

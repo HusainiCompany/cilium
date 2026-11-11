@@ -35,7 +35,7 @@ var (
 		IPv4:     "10.16.32.10",
 		IPv6:     "f00d::a10:0:0:abcd",
 		Identity: 9876,
-		Labels:   labels.ParseLabelArray("k1=v1", "k2=v2"),
+		Labels:   labels.ParseLabels("k1=v1", "k2=v2"),
 	}
 	fakeDestinationEndpoint = accesslog.EndpointInfo{
 		ID:       4321,
@@ -43,7 +43,7 @@ var (
 		IPv6:     "f00d::a10:0:0:1234",
 		Port:     80,
 		Identity: 6789,
-		Labels:   labels.ParseLabelArray("k3=v3", "k4=v4"),
+		Labels:   labels.ParseLabels("k3=v3", "k4=v4"),
 	}
 )
 
@@ -104,7 +104,7 @@ func Test_decodeEndpoint(t *testing.T) {
 	epi := accesslog.EndpointInfo{
 		ID:       1234,
 		Identity: 9876,
-		Labels: labels.ParseLabelArray(
+		Labels: labels.ParseLabels(
 			"k8s:io.cilium.k8s.policy.cluster=default",
 			"k8s:io.kubernetes.pod.namespace=kube-system",
 			"k8s:io.cilium.k8s.namespace.labels.kubernetes.io/metadata.name=kube-system",
@@ -151,6 +151,7 @@ func TestUpdateEndpointFromLocalPodMetadata(t *testing.T) {
 		}}
 	}
 	localWorkload := []*flowpb.Workload{{Kind: "StatefulSet", Name: "local-workload"}}
+	remoteWorkload := []*flowpb.Workload{{Kind: "Deployment", Name: "ipcache-workload"}}
 	tests := []struct {
 		name            string
 		endpointID      uint32
@@ -199,6 +200,19 @@ func TestUpdateEndpointFromLocalPodMetadata(t *testing.T) {
 			wantPodName:     "local-pod",
 		},
 		{
+			name:            "ownerless local Pod clears IPCache workload",
+			endpointID:      1234,
+			localEndpointID: 1234,
+			localNamespace:  "local-namespace",
+			localPodName:    "local-pod",
+			localPod: &slim_corev1.Pod{ObjectMeta: slim_metav1.ObjectMeta{
+				UID: "ownerless-pod-uid",
+			}},
+			wantNamespace: "local-namespace",
+			wantPodName:   "local-pod",
+			wantPodUID:    "ownerless-pod-uid",
+		},
+		{
 			name:            "different local endpoint preserves IPCache metadata and skips workloads",
 			endpointID:      1234,
 			localEndpointID: 4321,
@@ -209,6 +223,7 @@ func TestUpdateEndpointFromLocalPodMetadata(t *testing.T) {
 			wantNamespace:   "ipcache-namespace",
 			wantPodName:     "ipcache-pod",
 			wantPodUID:      "ipcache-pod-uid",
+			wantWorkloads:   remoteWorkload,
 		},
 	}
 
@@ -232,6 +247,7 @@ func TestUpdateEndpointFromLocalPodMetadata(t *testing.T) {
 				Namespace: "ipcache-namespace",
 				PodName:   "ipcache-pod",
 				PodUid:    "ipcache-pod-uid",
+				Workloads: remoteWorkload,
 			}
 
 			parser.updateEndpointFromLocal(ip, endpoint)

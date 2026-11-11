@@ -31,19 +31,34 @@ import (
 
 const waitForPoolInStateDBTimeout = time.Minute
 
-var MultiPoolAccessor = PoolSpecAccessors{
-	FromResource: func(cn *ciliumv2.CiliumNode) types.IPAMPoolSpec {
-		return cn.Spec.IPAM.Pools
-	},
-	ToResource: func(cn *ciliumv2.CiliumNode, spec types.IPAMPoolSpec) bool {
-		if !cn.Spec.IPAM.Pools.DeepEqual(&spec) {
-			cn.Spec.IPAM.Pools = spec
-			return true
-		}
-		return false
-	},
-}
+var (
+	MultiPoolAccessor = PoolSpecAccessors{
+		FromResource: func(cn *ciliumv2.CiliumNode) types.IPAMPoolSpec {
+			return cn.Spec.IPAM.Pools
+		},
+		ToResource: func(cn *ciliumv2.CiliumNode, spec types.IPAMPoolSpec) bool {
+			if !cn.Spec.IPAM.Pools.DeepEqual(&spec) {
+				cn.Spec.IPAM.Pools = spec
+				return true
+			}
+			return false
+		},
+	}
 
+	MultiPoolStatusAccessor = OperatorStatusAccessors{
+		FromResource: func(cn *ciliumv2.CiliumNode) string {
+			return cn.Status.IPAM.OperatorStatus.Error
+		},
+		ToResource: func(cn *ciliumv2.CiliumNode, errStr string) bool {
+			if cn.Status.IPAM.OperatorStatus.Error == errStr {
+				return false
+			}
+
+			cn.Status.IPAM.OperatorStatus.Error = errStr
+			return true
+		},
+	}
+)
 var _ Allocator = (*multiPoolAllocator)(nil)
 
 type MultiPoolAllocatorParams struct {
@@ -62,10 +77,12 @@ type MultiPoolAllocatorParams struct {
 	DB                        *statedb.DB
 	PodIPPools                statedb.Table[podippool.LocalPodIPPool]
 	OnlyMasqueradeDefaultPool bool
+
+	Metrics MultiPoolMetrics
 }
 
 type multiPoolAllocator struct {
-	manager *multiPoolManager
+	manager *MultiPoolManager
 	family  Family
 }
 
@@ -75,7 +92,7 @@ func newMultiPoolAllocators(ctx context.Context, p MultiPoolAllocatorParams) (Al
 		return nil, nil, fmt.Errorf("invalid --%s flag value: %w", option.IPAMMultiPoolPreAllocation, err)
 	}
 
-	mgr := newMultiPoolManager(MultiPoolManagerParams{
+	mgr := NewMultiPoolManager(MultiPoolManagerParams{
 		Logger:                p.Logger,
 		IPv4Enabled:           p.IPv4Enabled,
 		IPv6Enabled:           p.IPv6Enabled,
@@ -86,6 +103,7 @@ func newMultiPoolAllocators(ctx context.Context, p MultiPoolAllocatorParams) (Al
 		JobGroup:              p.JobGroup,
 		SkipMasqueradeForPool: shouldSkipMasqForPool(p.DB, p.PodIPPools, p.OnlyMasqueradeDefaultPool),
 		PoolSpecAccessors:     MultiPoolAccessor,
+		Metrics:               p.Metrics,
 	})
 
 	waitForAllPools(p.Logger, p.DB, p.PodIPPools, preallocMap)
@@ -112,23 +130,23 @@ func newMultiPoolAllocators(ctx context.Context, p MultiPoolAllocatorParams) (Al
 }
 
 func (c *multiPoolAllocator) Allocate(addr netip.Addr, owner string, pool Pool) (*AllocationResult, error) {
-	return c.manager.allocateIP(addr, owner, pool, c.family, true)
+	return c.manager.AllocateIP(addr, owner, pool, c.family, true)
 }
 
 func (c *multiPoolAllocator) AllocateWithoutSyncUpstream(addr netip.Addr, owner string, pool Pool) (*AllocationResult, error) {
-	return c.manager.allocateIP(addr, owner, pool, c.family, false)
+	return c.manager.AllocateIP(addr, owner, pool, c.family, false)
 }
 
 func (c *multiPoolAllocator) Release(addr netip.Addr, pool Pool) error {
-	return c.manager.releaseIP(addr, pool, c.family, true)
+	return c.manager.ReleaseIP(addr, pool, c.family, true)
 }
 
 func (c *multiPoolAllocator) AllocateNext(owner string, pool Pool) (*AllocationResult, error) {
-	return c.manager.allocateNext(owner, pool, c.family, true)
+	return c.manager.AllocateNext(owner, pool, c.family, true)
 }
 
 func (c *multiPoolAllocator) AllocateNextWithoutSyncUpstream(owner string, pool Pool) (*AllocationResult, error) {
-	return c.manager.allocateNext(owner, pool, c.family, false)
+	return c.manager.AllocateNext(owner, pool, c.family, false)
 }
 
 func (c *multiPoolAllocator) Dump() (map[Pool]sets.Set[netip.Addr], string) {
@@ -140,7 +158,7 @@ func (c *multiPoolAllocator) Capacity() uint64 {
 }
 
 func (c *multiPoolAllocator) RestoreFinished() {
-	c.manager.restoreFinished(c.family)
+	c.manager.RestoreFinished(c.family)
 }
 
 func shouldSkipMasqForPool(db *statedb.DB, podIPPools statedb.Table[podippool.LocalPodIPPool], onlyMasqueradeDefaultPool bool) SkipMasqueradeForPoolFn {
@@ -198,10 +216,10 @@ func waitForPool(logger *slog.Logger, db *statedb.DB, podIPPools statedb.Table[p
 // waitForLocalNodeUpdate blocks until the multi-pool manager has synchronized
 // the local node store with the CiliumNode resource. It returns an error if ctx
 // is cancelled before that.
-func waitForLocalNodeUpdate(ctx context.Context, logger *slog.Logger, mgr *multiPoolManager) error {
+func waitForLocalNodeUpdate(ctx context.Context, logger *slog.Logger, mgr *MultiPoolManager) error {
 	for {
 		select {
-		case <-mgr.localNodeUpdated():
+		case <-mgr.LocalNodeUpdated():
 			return nil
 		case <-ctx.Done():
 			return fmt.Errorf("waiting for the local CiliumNode resource to synchronize the local node store: %w", ctx.Err())

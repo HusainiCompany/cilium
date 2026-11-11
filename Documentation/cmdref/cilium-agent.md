@@ -122,7 +122,7 @@ cilium-agent [flags]
       --enable-bgp-control-plane-status-report                    Enable the BGP control plane status reporting (default true)
       --enable-bgp-legacy-origin-attribute                        Enable LoadBalancerIP routes to be advertised with BGP Origin Attribute set to INCOMPLETE
       --enable-bpf-clock-probe                                    Enable BPF clock source probing for more efficient tick retrieval
-      --enable-bpf-masquerade                                     Masquerade packets from endpoints leaving the host with BPF instead of iptables
+      --enable-bpf-masquerade                                     Masquerade packets from endpoints leaving the host with BPF instead of iptables (default true)
       --enable-bpf-stats                                          Enable BPF statistics collection
       --enable-bpf-tproxy                                         Enable BPF-based proxy redirection (beta), if support available
       --enable-cilium-api-server-access strings                   List of cilium API APIs which are administratively enabled. Supports '*'. (default [*])
@@ -146,7 +146,7 @@ cilium-agent [flags]
       --enable-health-check-nodeport                              Enables a healthcheck nodePort server for NodePort services with 'healthCheckNodePort' being set (default true)
       --enable-health-checking                                    Enable connectivity health checking (default true)
       --enable-host-firewall                                      Enable host network policies
-      --enable-host-legacy-routing                                Enable the legacy host forwarding model which does not bypass upper stack in host namespace
+      --enable-host-legacy-routing                                Enable the legacy host forwarding model which does not bypass upper stack in host namespace (default true)
       --enable-hubble                                             Enable hubble server
       --enable-hubble-open-metrics                                Enable exporting hubble metrics in OpenMetrics format.
       --enable-identity-mark                                      Enable setting identity mark for local traffic (default true)
@@ -176,14 +176,16 @@ cilium-agent [flags]
       --enable-masquerade-to-route-source                         Masquerade packets to the source IP provided from the routing layer rather than interface address
       --enable-monitor                                            Enable the monitor unix domain socket server (default true)
       --enable-nat46x64-gateway                                   Enable NAT46 and NAT64 gateway
-      --enable-network-driver                                     enable network driver to assign interfaces via Dynamic Resource Allocation
+      --enable-network-driver                                     Enable the Cilium Network Driver to assign interfaces via Dynamic Resource Allocation
+      --enable-network-driver-ipv4                                Enable IPv4 address assignment for Cilium Network Driver resources (default true)
+      --enable-network-driver-ipv6                                Enable IPv6 address assignment for Cilium Network Driver resources
       --enable-no-service-endpoints-routable                      Enable routes when service has 0 endpoints (default true)
       --enable-node-ipam                                          Enable Node IPAM
       --enable-node-selector-labels                               Enable use of node label based identity
       --enable-pmtu-discovery                                     Enable path MTU discovery to send ICMP fragmentation-needed replies to the client
       --enable-policy string                                      Enable policy enforcement (default "default")
       --enable-policy-secrets-sync                                Enables Envoy secret sync for Secrets used in CiliumNetworkPolicy and CiliumClusterwideNetworkPolicy
-      --enable-remote-node-masquerade                             Masquerade packets from endpoints leaving the host destined to a remote node in BPF masquerading mode. This option requires to set enable-bpf-masquerade to true.
+      --enable-remote-node-masquerade                             Masquerade packets from endpoints leaving the host destined to a remote node's ExternalIP when using BPF masquerading mode (default true)
       --enable-route-mtu-for-cni-chaining                         Enable route MTU for pod netns when CNI chaining is used
       --enable-sctp                                               Enable SCTP support (beta)
       --enable-service-topology                                   Enable support for service topology aware hints
@@ -194,7 +196,6 @@ cilium-agent [flags]
       --enable-vtep                                               Enable  VXLAN Tunnel Endpoint (VTEP) Integration (beta)
       --enable-well-known-identities                              Enable well-known identities for known Kubernetes components (default true)
       --enable-wireguard                                          Enable WireGuard
-      --enable-xdp-prefilter                                      Enable XDP prefiltering
       --enable-xt-socket-fallback                                 Enable fallback for missing xt_socket module (default true)
       --enable-ztunnel                                            Use zTunnel as Cilium's encryption infrastructure
       --encryption-strict-egress-allow-remote-node-identities     Allows unencrypted traffic from pods to remote node identities within the strict mode CIDR. This is required when tunneling is used or direct routing is used and the node CIDR and pod CIDR overlap.
@@ -224,7 +225,7 @@ cilium-agent [flags]
       --envoy-node-locality-enabled                               Enable Envoy node-locality support for zone-aware routing
       --envoy-policy-restore-timeout duration                     Maximum time to wait for endpoint policy restoration before starting serving resources to Envoy (default 3m0s)
       --envoy-secrets-namespace string                            EnvoySecretsNamespace is the namespace having secrets used by CEC
-      --envoy-xds-mode string                                     xDS server operating mode for Envoy proxy configuration. Valid values are "split" for the existing per-resource-type xDS, "delta-split" for incremental per-resource-type xDS, "ads" for Aggregated Discovery Service, or "strict-ads" for ADS with strict snapshot cache behavior and generated snapshot consistency checks (default "split")
+      --envoy-xds-mode string                                     xDS server operating mode for Envoy proxy configuration. Valid values are "split" for the existing per-resource-type xDS, "delta-split" for incremental per-resource-type xDS, "ads" for Aggregated Discovery Service, or "strict-ads" as a compatibility alias for "ads" (default "split")
       --exclude-local-address strings                             Exclude CIDR from being recognized as local address
       --exclude-node-label-patterns strings                       List of k8s node label regex patterns to be excluded from CiliumNode
       --external-envoy-proxy                                      whether the Envoy is deployed externally in form of a DaemonSet or not

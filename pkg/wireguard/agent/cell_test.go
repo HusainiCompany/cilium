@@ -32,6 +32,7 @@ import (
 	envoyCfg "github.com/cilium/cilium/pkg/envoy/config"
 	"github.com/cilium/cilium/pkg/hive"
 	"github.com/cilium/cilium/pkg/identity/cache"
+	iputil "github.com/cilium/cilium/pkg/ip"
 	"github.com/cilium/cilium/pkg/ipcache"
 	k8sClient "github.com/cilium/cilium/pkg/k8s/client/testutils"
 	k8sSynced "github.com/cilium/cilium/pkg/k8s/synced"
@@ -45,7 +46,7 @@ import (
 	"github.com/cilium/cilium/pkg/mtu"
 	"github.com/cilium/cilium/pkg/node"
 	"github.com/cilium/cilium/pkg/node/addressing"
-	nodeManager "github.com/cilium/cilium/pkg/node/manager"
+	nodePolicy "github.com/cilium/cilium/pkg/node/policy"
 	nodeTypes "github.com/cilium/cilium/pkg/node/types"
 	"github.com/cilium/cilium/pkg/nodediscovery"
 	"github.com/cilium/cilium/pkg/option"
@@ -106,7 +107,7 @@ func TestPrivileged_TestWireGuardCell(t *testing.T) {
 		ipCache       *ipcache.IPCache
 		nodeStore     *node.LocalNodeStore
 		nodeDiscovery *nodediscovery.NodeDiscovery
-		manager       nodeManager.NodeManager
+		nodeDB        *statedb.DB
 		cacheStatus   k8sSynced.CacheStatus
 
 		ctx = t.Context()
@@ -117,7 +118,7 @@ func TestPrivileged_TestWireGuardCell(t *testing.T) {
 	// getHive returns a new hive with Wireguard enabled/disabled.
 	getHive := func(wireguardEnabled bool) *hive.Hive {
 		return hive.New(
-			nodeManager.Cell,
+			nodePolicy.Cell,
 			nodediscovery.Cell,
 			source.Cell,
 			watchers.Cell,
@@ -158,11 +159,12 @@ func TestPrivileged_TestWireGuardCell(t *testing.T) {
 								WireguardPersistentKeepalive: 0,
 								NodeEncryptionOptOutLabels:   "",
 							},
-							EnableIPv4:       true,
-							EnableIPv6:       true,
-							StateDir:         testRunDir,
-							TunnelingEnabled: false,
-							EncryptNode:      false,
+							EnableIPv4:            true,
+							EnableIPv6:            true,
+							StateDir:              testRunDir,
+							TunnelingEnabled:      false,
+							RequiresNativeRouting: true, // Required to test the IPCache usage in the agent.
+							EncryptNode:           false,
 						},
 						TunnelConfig:     tunnel.Config{},
 						DaemonConfig:     option.Config,
@@ -174,7 +176,7 @@ func TestPrivileged_TestWireGuardCell(t *testing.T) {
 								IPAddresses: []nodeTypes.Address{
 									{
 										Type: addressing.NodeInternalIP,
-										IP:   k8s1NodeIPv4,
+										IP:   iputil.AddrFrom(iputil.AddrFromIP(k8s1NodeIPv4)),
 									},
 								},
 								Annotations: map[string]string{},
@@ -200,10 +202,10 @@ func TestPrivileged_TestWireGuardCell(t *testing.T) {
 			),
 
 			cell.Invoke(
-				func(a types.Agent, n *nodediscovery.NodeDiscovery, s *node.LocalNodeStore, u nodeManager.NodeManager, i *ipcache.IPCache, c k8sSynced.CacheStatus) {
+				func(a types.Agent, n *nodediscovery.NodeDiscovery, s *node.LocalNodeStore, db *statedb.DB, i *ipcache.IPCache, c k8sSynced.CacheStatus) {
 					wgAgent = a.(*Agent)
 					nodeDiscovery = n
-					manager = u
+					nodeDB = db
 					nodeStore = s
 					ipCache = i
 					cacheStatus = c
@@ -272,11 +274,9 @@ func TestPrivileged_TestWireGuardCell(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, dev.Peers, 1)
 
-			// 6.d Signal that the initial Kubernetes node listing is complete. The
-			// cache status unblocks the peer garbage collector, while NodeSync
-			// completes the corresponding node table initializer.
+			// 6.d Signal that the initial Kubernetes node listing is complete.
+			// The cache status unblocks the peer garbage collector.
 			close(cacheStatus)
-			manager.NodeSync()
 
 			// 6.e TriggerLabelInjection to unlock WaitForRevision from the [*Agent.peerGarbageCollector].
 			ipCache.TriggerLabelInjection()
@@ -291,19 +291,22 @@ func TestPrivileged_TestWireGuardCell(t *testing.T) {
 				assert.Empty(c, dev.Peers)
 			}, TestTimeout, 50*time.Millisecond)
 
-			// 7.a Ensure the agent subscribed to node events (nodemanager-subscribe job).
+			// 7.a Ensure the agent subscribed to node events.
 			//     Let's upsert a new node, and ensure the agent maps contain the new peer.
-			manager.NodeUpdated(nodeTypes.Node{
+			newNode := nodeTypes.Node{
 				Name: k8s2NodeName,
 				IPAddresses: []nodeTypes.Address{
 					{
 						Type: addressing.NodeInternalIP,
-						IP:   k8s2NodeIPv4,
+						IP:   iputil.AddrFrom(iputil.AddrFromIP(k8s2NodeIPv4)),
 					},
 				},
 				Source:          source.Unspec,
 				WireguardPubKey: wgAgent.privKey.String(),
-			})
+			}
+			txn := nodeDB.WriteTxn(wgAgent.nodeWriter.Table())
+			wgAgent.nodeWriter.Upsert(txn, &newNode)
+			txn.Commit()
 
 			// 7.b Ensure the agent has stored a peer configuration for the new node.
 			require.EventuallyWithT(t, func(c *assert.CollectT) {

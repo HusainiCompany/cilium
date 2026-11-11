@@ -14,13 +14,10 @@
 #define ENCAP_IFINDEX 1
 
 /* Overlapping PodCIDR is only supported for IPv4 for now */
-#define ENABLE_IPV4
+#define ENABLE_IPV4 1
 
 /* Overlapping PodCIDR depends on tunnel */
-#define TUNNEL_MODE
-
-/* Fully enable KPR since kubeproxy doesn't understand cluster aware addressing */
-#define ENABLE_NODEPORT
+#define TUNNEL_MODE 1
 
 /* Cluster-aware addressing is mandatory for overlapping PodCIDR support */
 #define ENABLE_CLUSTER_AWARE_ADDRESSING		1
@@ -67,7 +64,9 @@ int mock_skb_get_tunnel_key(struct __ctx_buff *ctx __maybe_unused, struct bpf_tu
  * and breaks the skb->cb test.
  */
 
-#define DEBUG
+#include <lib/dbg.h>
+ASSIGN_CONFIG(bool, debug, true)
+
 #include <lib/drop.h>
 
 #define _send_drop_notify mock_send_drop_notify
@@ -89,6 +88,9 @@ ASSIGN_CONFIG(union v4addr, ipv4_inter_cluster_snat, { .be32 = BACKEND_NODE_IP }
 
 /* Overwrite (local) cluster_id defined in clustermesh.h */
 ASSIGN_CONFIG(__u32, cluster_id, 1)
+
+ASSIGN_CONFIG(bool, enable_ipv4, true)
+ASSIGN_CONFIG(bool, enable_nodeport, true)
 
 #include "lib/endpoint.h"
 

@@ -7,7 +7,6 @@
 #include "drop.h"
 #include "nodeport.h"
 
-#ifdef ENABLE_NODEPORT
 
 #if defined(IS_BPF_OVERLAY)
 #define NODEPORT_OBS_POINT_EGRESS      TRACE_TO_OVERLAY
@@ -82,14 +81,13 @@ static __always_inline int nodeport_snat_fwd_ipv6(struct __ctx_buff *ctx,
 	    nodeport_has_nat_conflict_ipv6(ctx, ip6, &args->target))
 		goto apply_snat;
 
-#if defined(ENABLE_MASQUERADE_IPV6) && defined(IS_BPF_HOST)
-	ret = snat_v6_needs_masquerade(ctx, fraginfo, l4_off);
-#endif /* ENABLE_MASQUERADE_IPV6 && IS_BPF_HOST */
+	if (is_defined(IS_BPF_HOST) && CONFIG(enable_masquerade_ipv6))
+		ret = snat_v6_needs_masquerade(ctx, fraginfo, l4_off);
 	if (IS_ERR(ret))
 		goto out;
 
-#if defined(ENABLE_EGRESS_GATEWAY_COMMON) && defined(IS_BPF_HOST)
-	if (args->target.egress_gateway) {
+	if (is_defined(ENABLE_EGRESS_GATEWAY_COMMON) && is_defined(IS_BPF_HOST) &&
+	    args->target.egress_gateway) {
 		if (ctx_egw_done(ctx))
 			goto apply_snat;
 
@@ -104,7 +102,6 @@ static __always_inline int nodeport_snat_fwd_ipv6(struct __ctx_buff *ctx,
 		if (ret != CTX_ACT_OK)
 			return ret;
 	}
-#endif
 
 apply_snat:
 	ipv6_addr_copy(saddr, &args->tuple.saddr);
@@ -130,6 +127,7 @@ out:
 
 DEFINE_AUX(union v6addr, snat_fwd_saddr);
 
+#ifndef SKIP_NODEPORT_PROGS
 __declare_tail(CILIUM_CALL_IPV6_NODEPORT_SNAT_FWD)
 int tail_handle_snat_fwd_ipv6(struct __ctx_buff *ctx)
 {
@@ -160,6 +158,7 @@ int tail_handle_snat_fwd_ipv6(struct __ctx_buff *ctx)
 
 	return ret;
 }
+#endif /* !SKIP_NODEPORT_PROGS */
 
 static __always_inline int
 nodeport_rev_dnat_fwd_ipv6(struct __ctx_buff *ctx, bool *snat_done,
@@ -222,7 +221,7 @@ skip_fib:
 		trace->monitor = monitor;
 
 		ret = __lb6_rev_nat(ctx, l4_off, &tuple, &nat_info,
-				    ipfrag_has_l4_header(fraginfo), CT_EGRESS, false);
+				    ipfrag_has_l4_header(fraginfo), false);
 		if (IS_ERR(ret))
 			return ret;
 
@@ -243,15 +242,15 @@ __handle_nat_fwd_ipv6(struct __ctx_buff *ctx, __u32 src_id __maybe_unused,
 	if (ret != CTX_ACT_OK || revdnat_only)
 		return ret;
 
-#if !defined(ENABLE_DSR) ||						\
-    (defined(ENABLE_DSR) && defined(ENABLE_DSR_BYUSER)) ||		\
-     defined(ENABLE_MASQUERADE_IPV6)
-	if (!snat_done) {
-		ctx_store_meta(ctx, CB_SRC_LABEL, src_id);
-		ret = tail_call_internal(ctx, CILIUM_CALL_IPV6_NODEPORT_SNAT_FWD,
-					 ext_err);
+	if (!CONFIG(dsr_cfg).enable || CONFIG(dsr_cfg).enable_by_user ||
+	    CONFIG(enable_masquerade_ipv6)) {
+		if (!snat_done) {
+			ctx_store_meta(ctx, CB_SRC_LABEL, src_id);
+			ret = tail_call_internal(ctx,
+						 CILIUM_CALL_IPV6_NODEPORT_SNAT_FWD,
+						 ext_err);
+		}
 	}
-#endif
 
 	if (is_defined(IS_BPF_HOST) && snat_done)
 		ctx_snat_done_set(ctx);
@@ -268,6 +267,7 @@ handle_nat_fwd_ipv6(struct __ctx_buff *ctx, __u32 cb_nat_flags,
 	return __handle_nat_fwd_ipv6(ctx, src_id, revdnat_only, trace, ext_err);
 }
 
+#ifndef SKIP_NODEPORT_PROGS
 __declare_tail(CILIUM_CALL_IPV6_NODEPORT_NAT_FWD)
 static __always_inline
 int tail_handle_nat_fwd_ipv6(struct __ctx_buff *ctx)
@@ -292,9 +292,9 @@ int tail_handle_nat_fwd_ipv6(struct __ctx_buff *ctx)
 
 	return ret;
 }
+#endif /* !SKIP_NODEPORT_PROGS */
 #endif /* ENABLE_IPV6 */
 
-#ifdef ENABLE_IPV4
 static __always_inline bool
 nodeport_has_nat_conflict_ipv4(const struct __ctx_buff *ctx __maybe_unused,
 			       const struct iphdr *ip4 __maybe_unused,
@@ -355,7 +355,7 @@ static __always_inline int nodeport_snat_fwd_ipv4(struct __ctx_buff *ctx,
 	snat_v4_init_tuple(ip4, NAT_DIR_EGRESS, &args->tuple);
 	l4_off = ETH_HLEN + ipv4_hdrlen(ip4);
 
-	if (is_defined(IS_BPF_HOST) && is_defined(ENABLE_MASQUERADE_IPV4)) {
+	if (is_defined(IS_BPF_HOST) && CONFIG(enable_masquerade_ipv4)) {
 		const struct endpoint_info *ep;
 
 		ep = __lookup_ip4_endpoint(ip4->saddr);
@@ -393,14 +393,15 @@ static __always_inline int nodeport_snat_fwd_ipv4(struct __ctx_buff *ctx,
 # endif
 #endif /* TUNNEL_MODE && IS_BPF_OVERLAY */
 
-#if defined(ENABLE_MASQUERADE_IPV4) && defined(IS_BPF_HOST)
-	ret = snat_v4_needs_masquerade(ctx, fraginfo, l4_off);
-#endif /*ENABLE_MASQUERADE_IPV4 && IS_BPF_HOST */
+#if defined(IS_BPF_HOST)
+	if (CONFIG(enable_masquerade_ipv4))
+		ret = snat_v4_needs_masquerade(ctx, fraginfo, l4_off);
+#endif /* IS_BPF_HOST */
 	if (IS_ERR(ret))
 		goto out;
 
-#if defined(ENABLE_EGRESS_GATEWAY_COMMON) && defined(IS_BPF_HOST)
-	if (args->target.egress_gateway) {
+	if (is_defined(ENABLE_EGRESS_GATEWAY_COMMON) && is_defined(IS_BPF_HOST) &&
+	    args->target.egress_gateway) {
 		/* from-overlay has already picked the correct egress interface: */
 		if (ctx_egw_done(ctx))
 			goto apply_snat;
@@ -419,7 +420,6 @@ static __always_inline int nodeport_snat_fwd_ipv4(struct __ctx_buff *ctx,
 		if (!revalidate_data(ctx, &data, &data_end, &ip4))
 			return DROP_INVALID;
 	}
-#endif
 
 apply_snat:
 	*saddr = args->tuple.saddr;
@@ -452,6 +452,7 @@ out:
 	return ret;
 }
 
+#ifndef SKIP_NODEPORT_PROGS
 __declare_tail(CILIUM_CALL_IPV4_NODEPORT_SNAT_FWD)
 int tail_handle_snat_fwd_ipv4(struct __ctx_buff *ctx)
 {
@@ -481,6 +482,7 @@ int tail_handle_snat_fwd_ipv4(struct __ctx_buff *ctx)
 
 	return ret;
 }
+#endif /* !SKIP_NODEPORT_PROGS */
 
 static __always_inline int
 nodeport_rev_dnat_fwd_ipv4(struct __ctx_buff *ctx, bool *snat_done,
@@ -569,17 +571,14 @@ __handle_nat_fwd_ipv4(struct __ctx_buff *ctx, __u32 cluster_id __maybe_unused,
 	if (ret != CTX_ACT_OK || revdnat_only)
 		return ret;
 
-#if !defined(ENABLE_DSR) ||						\
-    (defined(ENABLE_DSR) && defined(ENABLE_DSR_BYUSER)) ||		\
-     defined(ENABLE_MASQUERADE_IPV4) ||					\
-    (defined(ENABLE_CLUSTER_AWARE_ADDRESSING) && defined(ENABLE_INTER_CLUSTER_SNAT))
-	if (!snat_done) {
+	if ((!CONFIG(dsr_cfg).enable || CONFIG(dsr_cfg).enable_by_user ||
+	     CONFIG(enable_masquerade_ipv4) ||
+	     (is_defined(ENABLE_CLUSTER_AWARE_ADDRESSING) &&
+	      is_defined(ENABLE_INTER_CLUSTER_SNAT))) && !snat_done) {
 		ctx_store_meta(ctx, CB_CLUSTER_ID_EGRESS, cluster_id);
 		ctx_store_meta(ctx, CB_SRC_LABEL, src_id);
-		ret = tail_call_internal(ctx, CILIUM_CALL_IPV4_NODEPORT_SNAT_FWD,
-					 ext_err);
-	}
-#endif
+		ret = tail_call_internal(ctx, CILIUM_CALL_IPV4_NODEPORT_SNAT_FWD, ext_err);
+    }
 
 	if (is_defined(IS_BPF_HOST) && snat_done)
 		ctx_snat_done_set(ctx);
@@ -596,6 +595,7 @@ handle_nat_fwd_ipv4(struct __ctx_buff *ctx, __u32 cb_nat_flags, __u32 cluster_id
 	return __handle_nat_fwd_ipv4(ctx, cluster_id, src_id, revdnat_only, trace, ext_err);
 }
 
+#ifndef SKIP_NODEPORT_PROGS
 __declare_tail(CILIUM_CALL_IPV4_NODEPORT_NAT_FWD)
 static __always_inline
 int tail_handle_nat_fwd_ipv4(struct __ctx_buff *ctx)
@@ -621,7 +621,7 @@ int tail_handle_nat_fwd_ipv4(struct __ctx_buff *ctx)
 
 	return ret;
 }
-#endif /* ENABLE_IPV4 */
+#endif /* !SKIP_NODEPORT_PROGS */
 
 static __always_inline int
 lb_handle_health(struct __ctx_buff *ctx __maybe_unused, __be16 proto)
@@ -634,10 +634,13 @@ lb_handle_health(struct __ctx_buff *ctx __maybe_unused, __be16 proto)
 		return CTX_ACT_OK;
 
 	switch (proto) {
-#if defined(ENABLE_IPV4) && DSR_ENCAP_MODE == DSR_ENCAP_IPIP
+#if DSR_ENCAP_MODE == DSR_ENCAP_IPIP
 	case bpf_htons(ETH_P_IP): {
 		struct lb4_health *val;
 		int flags = 0;
+
+		if (!is_defined(ENABLE_IPV4))
+			return CTX_ACT_OK;
 
 		key = get_socket_cookie(ctx);
 		val = map_lookup_elem(&cilium_lb4_health, &key);
@@ -703,7 +706,7 @@ handle_nat_fwd(struct __ctx_buff *ctx, __u32 cluster_id, __u32 src_id,
 		   __s8 *ext_err __maybe_unused)
 {
 	bool use_tailcall = (is_defined(ENABLE_IPV4) && is_defined(ENABLE_IPV6)) ||
-			    (is_defined(ENABLE_HOST_FIREWALL) && is_defined(IS_BPF_HOST)) ||
+			    (CONFIG(enable_host_firewall) && is_defined(IS_BPF_HOST)) ||
 			    (is_defined(ENABLE_CLUSTER_AWARE_ADDRESSING) && is_defined(ENABLE_INTER_CLUSTER_SNAT)) ||
 			    (is_defined(ENABLE_EGRESS_GATEWAY_COMMON) && is_defined(IS_BPF_HOST));
 	int ret = CTX_ACT_OK;
@@ -719,16 +722,16 @@ handle_nat_fwd(struct __ctx_buff *ctx, __u32 cluster_id, __u32 src_id,
 	}
 
 	switch (proto) {
-#ifdef ENABLE_IPV4
 	case bpf_htons(ETH_P_IP):
-		if (use_tailcall)
-			ret = tail_call_internal(ctx, CILIUM_CALL_IPV4_NODEPORT_NAT_FWD,
-						 ext_err);
-		else
-			ret = handle_nat_fwd_ipv4(ctx, cb_nat_flags, cluster_id, src_id,
-						  trace, ext_err);
+		if (is_defined(ENABLE_IPV4)) {
+			if (use_tailcall)
+				ret = tail_call_internal(ctx, CILIUM_CALL_IPV4_NODEPORT_NAT_FWD,
+							 ext_err);
+			else
+				ret = handle_nat_fwd_ipv4(ctx, cb_nat_flags, cluster_id, src_id,
+							  trace, ext_err);
+		}
 		break;
-#endif /* ENABLE_IPV4 */
 #ifdef ENABLE_IPV6
 	case bpf_htons(ETH_P_IPV6):
 		if (use_tailcall)
@@ -744,5 +747,3 @@ handle_nat_fwd(struct __ctx_buff *ctx, __u32 cluster_id, __u32 src_id,
 	}
 	return ret;
 }
-
-#endif /* ENABLE_NODEPORT */

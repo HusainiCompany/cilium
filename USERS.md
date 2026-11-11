@@ -78,6 +78,11 @@ Users (Alphabetically)
       U: L3/L4/L7 policies
       L: https://youtu.be/39FLsSc2P-Y
 
+    * N: Aether
+      D: Aether uses Cilium as the CNI for every tenant cluster of its managed Kubernetes platform
+      U: Networking, NetworkPolicy, Host Firewall, LoadBalancer IPAM, kube-proxy replacement, Service Mesh
+      L: https://aetherplatform.cloud/
+
     * N: AirQo
       D: AirQo uses Cilium as the CNI plugin
       U: CNI, Networking, NetworkPolicy, Cluster Mesh, Hubble, Kubernetes services
@@ -352,6 +357,11 @@ Users (Alphabetically)
       U: Service load-balancing, Encryption, CNI, NetworkPolicies
       Q: @kevholditch-f3, samo-f3, ewilde-form3
 
+    * N: Forterro
+      D: Forterro uses Cilium as the CNI of its on-premises Kubernetes platform (Talos Linux) in its datacenter and at its edge sites, for internal services and KubeVirt virtual machines
+      U: CNI, Native routing, Multi-pool IPAM, Kube-Proxy Replacement, BGP, CiliumNetworkPolicy, CiliumClusterwideNetworkPolicy, CiliumCIDRGroup, DNS-based policies (external Envoy), Hubble
+      L: https://www.forterro.com
+
     * N: FPT Telecom
       D: FTEL uses Cilium as their CNI plugin to handle the massive CPE Management traffic to the backends
       U: CNI, CiliumclusterWideNetworkPolicy, CiliumNetworkPolicy, Kube-Proxy Replacement, Hubble, Direct Routing, Egress Gateway, Service Load Balancing, L2 Announcement, BGP Advertisement
@@ -402,7 +412,7 @@ Users (Alphabetically)
       L: https://www.guidewire.com
 
     * N: IDNIC | Kadabra
-      D: IDNIC is the National Internet Registry administering IP addresses for INDONESIA, uses Cilium to powered Kadabra project runing services across multi data centers.
+      D: IDNIC is the National Internet Registry administering IP addresses for INDONESIA, uses Cilium to powered Kadabra project running services across multi data centers.
       U: Networking, Network Policies, kube-proxy Replacement, Service Load Balancing and Cluster Mesh
       L: https://ris.idnic.net/
       Q: @ardikabs

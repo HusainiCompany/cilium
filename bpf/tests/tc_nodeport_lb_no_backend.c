@@ -9,19 +9,22 @@
 /* Enable code paths under test */
 #define ENABLE_IPV4			1
 #define ENABLE_IPV6			1
-#define ENABLE_NODEPORT			1
-#define ENABLE_MASQUERADE_IPV4	1
-#define ENABLE_MASQUERADE_IPV6	1
 
 #define FRONTEND_IP		v4_svc_one
 #define FRONTEND_IPV6		v6_svc_one
 #define FRONTEND_PORT		tcp_svc_one
 
+#define CLIENT_IDENTITY		1312
+
 #include "lib/bpf_host.h"
 
+ASSIGN_CONFIG(bool, enable_ipv4, true)
 ASSIGN_CONFIG(union v4addr, nat_ipv4_masquerade, { .be32 = FRONTEND_IP})
+ASSIGN_CONFIG(bool, enable_masquerade_ipv6, true)
 ASSIGN_CONFIG(bool, enable_no_service_endpoints_routable, true)
 ASSIGN_CONFIG(bool, enable_service_no_backend_response, true)
+ASSIGN_CONFIG(bool, enable_masquerade_ipv4, true)
+ASSIGN_CONFIG(bool, enable_nodeport, true)
 
 #include "lib/icmp.h"
 #include "lib/ipcache.h"
@@ -66,12 +69,13 @@ int nodeport_no_backend4_setup(struct __ctx_buff *ctx)
 	__u16 revnat_id = 1;
 
 	lb_v4_add_service(FRONTEND_IP, FRONTEND_PORT, IPPROTO_UDP, 0, revnat_id);
+	ipcache_v4_add_entry(v4_ext_one, 0, CLIENT_IDENTITY, 0, 0);
 
 	return netdev_receive_packet(ctx);
 }
 
 static __always_inline int
-validate_icmp_reply(const struct __ctx_buff *ctx, __u32 retval)
+validate_icmp_reply(const struct __ctx_buff *ctx, __u32 retval, bool check_src_identity)
 {
 	void *data, *data_end;
 	__u32 *status_code;
@@ -89,6 +93,14 @@ validate_icmp_reply(const struct __ctx_buff *ctx, __u32 retval)
 	test_log("Status code: %d", *status_code);
 	assert(*status_code == retval);
 
+	if (check_src_identity) {
+		__u32 src_label = ctx_load_meta(ctx, CB_SRC_LABEL);
+
+		if (src_label != CLIENT_IDENTITY)
+			test_fatal("skb->cb[CB_SRC_LABEL] should be %d, got %d",
+				   CLIENT_IDENTITY, src_label);
+	}
+
 	ASSERT_CTX_BUF_OFF("lb4_udp_clusterip_icmp_unreach",
 			   "Ether", ctx, sizeof(__u32),
 			   lb4_udp_clusterip_icmp_unreach,
@@ -100,7 +112,7 @@ validate_icmp_reply(const struct __ctx_buff *ctx, __u32 retval)
 CHECK(PROG_TYPE, "tc_nodeport_no_backend4")
 int nodeport_no_backend4_check(__maybe_unused const struct __ctx_buff *ctx)
 {
-	return validate_icmp_reply(ctx, CTX_ACT_REDIRECT);
+	return validate_icmp_reply(ctx, CTX_ACT_REDIRECT, true);
 }
 
 /* Test that the ICMP error message leaves the node */
@@ -128,7 +140,7 @@ int nodeport_no_backend4_2_reply_setup(struct __ctx_buff *ctx)
 CHECK(PROG_TYPE, "tc_nodeport_no_backend4_2_reply")
 int nodeport_no_backend4_2_reply_check(__maybe_unused const struct __ctx_buff *ctx)
 {
-	return validate_icmp_reply(ctx, CTX_ACT_OK);
+	return validate_icmp_reply(ctx, CTX_ACT_OK, false);
 }
 
 /* Test that a SVC without backends returns an ICMP error */
@@ -154,16 +166,19 @@ int nodeport_no_backend6_setup(struct __ctx_buff *ctx)
 	__u16 revnat_id = 2;
 
 	union v6addr frontend_ip = {};
+	union v6addr client_ip = { .addr = v6_ext_node_one_addr };
 
 	memcpy(frontend_ip.addr, (void *)FRONTEND_IPV6, 16);
 
 	lb_v6_add_service(&frontend_ip, FRONTEND_PORT, IPPROTO_UDP, 0, revnat_id);
+	ipcache_v6_add_entry(&client_ip, 0, CLIENT_IDENTITY, 0, 0);
 
 	return netdev_receive_packet(ctx);
 }
 
 static __always_inline int
-validate_icmpv6_reply_return(const struct __ctx_buff *ctx, __u32 retval)
+validate_icmpv6_reply_return(const struct __ctx_buff *ctx, __u32 retval,
+			     bool check_src_identity)
 {
 	struct validate_icmpv6_reply_args args = {
 		.ctx = ctx,
@@ -171,6 +186,8 @@ validate_icmpv6_reply_return(const struct __ctx_buff *ctx, __u32 retval)
 		.buf_len = sizeof(lb6_udp_clusterip_icmp_unreach),
 		.dst_idx = 1,
 		.retval = retval,
+		.check_src_identity = check_src_identity,
+		.src_identity = CLIENT_IDENTITY,
 	};
 	return validate_icmpv6_reply(&args);
 }
@@ -178,7 +195,7 @@ validate_icmpv6_reply_return(const struct __ctx_buff *ctx, __u32 retval)
 CHECK(PROG_TYPE, "tc_nodeport_no_backend6")
 int nodeport_no_backend6_check(__maybe_unused const struct __ctx_buff *ctx)
 {
-	return validate_icmpv6_reply_return(ctx, CTX_ACT_REDIRECT);
+	return validate_icmpv6_reply_return(ctx, CTX_ACT_REDIRECT, true);
 }
 
 /* Test that the ICMP error message leaves the node */
@@ -206,5 +223,5 @@ int nodeport_no_backend6_2_reply_setup(struct __ctx_buff *ctx)
 CHECK(PROG_TYPE, "tc_nodeport_no_backend6_2_reply")
 int nodeport_no_backend6_2_reply_check(__maybe_unused const struct __ctx_buff *ctx)
 {
-	return validate_icmpv6_reply_return(ctx, CTX_ACT_OK);
+	return validate_icmpv6_reply_return(ctx, CTX_ACT_OK, false);
 }

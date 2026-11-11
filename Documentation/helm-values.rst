@@ -64,182 +64,6 @@
      - The api-rate-limit option can be used to overwrite individual settings of the default configuration for rate limiting calls to the Cilium Agent API
      - string
      - ``nil``
-   * - :spelling:ignore:`authentication.mutual.spire.adminSocketPath`
-     - SPIRE socket path where the SPIRE delegated api agent is listening
-     - string
-     - ``"/run/spire/sockets/admin.sock"``
-   * - :spelling:ignore:`authentication.mutual.spire.agentSocketPath`
-     - SPIRE socket path where the SPIRE workload agent is listening. Applies to both the Cilium Agent and Operator
-     - string
-     - ``"/run/spire/sockets/agent/agent.sock"``
-   * - :spelling:ignore:`authentication.mutual.spire.annotations`
-     - Annotations to be added to all top-level spire objects (resources under templates/spire)
-     - object
-     - ``{}``
-   * - :spelling:ignore:`authentication.mutual.spire.connectionTimeout`
-     - SPIRE connection timeout
-     - string
-     - ``"30s"``
-   * - :spelling:ignore:`authentication.mutual.spire.enabled`
-     - Enable SPIRE integration (beta)
-     - bool
-     - ``false``
-   * - :spelling:ignore:`authentication.mutual.spire.install.agent.affinity`
-     - SPIRE agent affinity configuration
-     - object
-     - ``{}``
-   * - :spelling:ignore:`authentication.mutual.spire.install.agent.annotations`
-     - SPIRE agent annotations
-     - object
-     - ``{}``
-   * - :spelling:ignore:`authentication.mutual.spire.install.agent.image`
-     - SPIRE agent image
-     - object
-     - ``{"digest":"sha256:41b0dcd8b258a69db9e2768292a060766fb76fd866e4bc925849981ea1b825ff","override":null,"pullPolicy":"Always","repository":"ghcr.io/spiffe/spire-agent","tag":"1.15.3","useDigest":true}``
-   * - :spelling:ignore:`authentication.mutual.spire.install.agent.labels`
-     - SPIRE agent labels
-     - object
-     - ``{}``
-   * - :spelling:ignore:`authentication.mutual.spire.install.agent.nodeSelector`
-     - SPIRE agent nodeSelector configuration ref: ref: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#nodeselector
-     - object
-     - ``{}``
-   * - :spelling:ignore:`authentication.mutual.spire.install.agent.podSecurityContext`
-     - Security context to be added to spire agent pods. SecurityContext holds pod-level security attributes and common container settings. ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
-     - object
-     - ``{}``
-   * - :spelling:ignore:`authentication.mutual.spire.install.agent.priorityClassName`
-     - The priority class to use for the spire agent
-     - string
-     - ``""``
-   * - :spelling:ignore:`authentication.mutual.spire.install.agent.resources`
-     - container resource limits & requests
-     - object
-     - ``{}``
-   * - :spelling:ignore:`authentication.mutual.spire.install.agent.securityContext`
-     - Security context to be added to spire agent containers. SecurityContext holds pod-level security attributes and common container settings. ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-container
-     - object
-     - ``{}``
-   * - :spelling:ignore:`authentication.mutual.spire.install.agent.serviceAccount`
-     - SPIRE agent service account
-     - object
-     - ``{"create":true,"name":"spire-agent"}``
-   * - :spelling:ignore:`authentication.mutual.spire.install.agent.skipKubeletVerification`
-     - SPIRE Workload Attestor kubelet verification.
-     - bool
-     - ``true``
-   * - :spelling:ignore:`authentication.mutual.spire.install.agent.tolerations`
-     - SPIRE agent tolerations configuration By default it follows the same tolerations as the agent itself to allow the Cilium agent on this node to connect to SPIRE. ref: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
-     - list
-     - ``[{"effect":"NoSchedule","key":"node.kubernetes.io/not-ready"},{"effect":"NoSchedule","key":"node-role.kubernetes.io/master"},{"effect":"NoSchedule","key":"node-role.kubernetes.io/control-plane"},{"effect":"NoSchedule","key":"node.cloudprovider.kubernetes.io/uninitialized","value":"true"},{"key":"CriticalAddonsOnly","operator":"Exists"}]``
-   * - :spelling:ignore:`authentication.mutual.spire.install.enabled`
-     - Enable SPIRE installation. This will only take effect only if authentication.mutual.spire.enabled is true
-     - bool
-     - ``true``
-   * - :spelling:ignore:`authentication.mutual.spire.install.existingNamespace`
-     - SPIRE namespace already exists. Set to true if Helm should not create, manage, and import the SPIRE namespace.
-     - bool
-     - ``false``
-   * - :spelling:ignore:`authentication.mutual.spire.install.initImage`
-     - init container image of SPIRE agent and server
-     - object
-     - ``{"digest":"sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616","override":null,"pullPolicy":"Always","repository":"docker.io/library/busybox","tag":"1.38.0","useDigest":true}``
-   * - :spelling:ignore:`authentication.mutual.spire.install.namespace`
-     - SPIRE namespace to install into
-     - string
-     - ``"cilium-spire"``
-   * - :spelling:ignore:`authentication.mutual.spire.install.server.affinity`
-     - SPIRE server affinity configuration
-     - object
-     - ``{}``
-   * - :spelling:ignore:`authentication.mutual.spire.install.server.annotations`
-     - SPIRE server annotations
-     - object
-     - ``{}``
-   * - :spelling:ignore:`authentication.mutual.spire.install.server.ca.keyType`
-     - SPIRE CA key type AWS requires the use of RSA. EC cryptography is not supported
-     - string
-     - ``"rsa-4096"``
-   * - :spelling:ignore:`authentication.mutual.spire.install.server.ca.subject`
-     - SPIRE CA Subject
-     - object
-     - ``{"commonName":"Cilium SPIRE CA","country":"US","organization":"SPIRE"}``
-   * - :spelling:ignore:`authentication.mutual.spire.install.server.dataStorage.accessMode`
-     - Access mode of the SPIRE server data storage
-     - string
-     - ``"ReadWriteOnce"``
-   * - :spelling:ignore:`authentication.mutual.spire.install.server.dataStorage.enabled`
-     - Enable SPIRE server data storage
-     - bool
-     - ``true``
-   * - :spelling:ignore:`authentication.mutual.spire.install.server.dataStorage.size`
-     - Size of the SPIRE server data storage
-     - string
-     - ``"1Gi"``
-   * - :spelling:ignore:`authentication.mutual.spire.install.server.dataStorage.storageClass`
-     - StorageClass of the SPIRE server data storage
-     - string
-     - ``nil``
-   * - :spelling:ignore:`authentication.mutual.spire.install.server.image`
-     - SPIRE server image
-     - object
-     - ``{"digest":"sha256:4082f30d3e0ddc4000a171392c4ea174345ee44d161ee917c70b97b2ecfba141","override":null,"pullPolicy":"Always","repository":"ghcr.io/spiffe/spire-server","tag":"1.15.3","useDigest":true}``
-   * - :spelling:ignore:`authentication.mutual.spire.install.server.initContainers`
-     - SPIRE server init containers
-     - list
-     - ``[]``
-   * - :spelling:ignore:`authentication.mutual.spire.install.server.labels`
-     - SPIRE server labels
-     - object
-     - ``{}``
-   * - :spelling:ignore:`authentication.mutual.spire.install.server.nodeSelector`
-     - SPIRE server nodeSelector configuration ref: ref: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#nodeselector
-     - object
-     - ``{}``
-   * - :spelling:ignore:`authentication.mutual.spire.install.server.podSecurityContext`
-     - Security context to be added to spire server pods. SecurityContext holds pod-level security attributes and common container settings. ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
-     - object
-     - ``{}``
-   * - :spelling:ignore:`authentication.mutual.spire.install.server.priorityClassName`
-     - The priority class to use for the spire server
-     - string
-     - ``""``
-   * - :spelling:ignore:`authentication.mutual.spire.install.server.resources`
-     - container resource limits & requests
-     - object
-     - ``{}``
-   * - :spelling:ignore:`authentication.mutual.spire.install.server.securityContext`
-     - Security context to be added to spire server containers. SecurityContext holds pod-level security attributes and common container settings. ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-container
-     - object
-     - ``{}``
-   * - :spelling:ignore:`authentication.mutual.spire.install.server.service.annotations`
-     - Annotations to be added to the SPIRE server service
-     - object
-     - ``{}``
-   * - :spelling:ignore:`authentication.mutual.spire.install.server.service.labels`
-     - Labels to be added to the SPIRE server service
-     - object
-     - ``{}``
-   * - :spelling:ignore:`authentication.mutual.spire.install.server.service.type`
-     - Service type for the SPIRE server service
-     - string
-     - ``"ClusterIP"``
-   * - :spelling:ignore:`authentication.mutual.spire.install.server.serviceAccount`
-     - SPIRE server service account
-     - object
-     - ``{"create":true,"name":"spire-server"}``
-   * - :spelling:ignore:`authentication.mutual.spire.install.server.tolerations`
-     - SPIRE server tolerations configuration ref: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
-     - list
-     - ``[]``
-   * - :spelling:ignore:`authentication.mutual.spire.serverAddress`
-     - SPIRE server address used by Cilium Operator  If k8s Service DNS along with port number is used (e.g. :raw-html-m2r:`<service-name>`.\ :raw-html-m2r:`<namespace>`.svc(.*):\ :raw-html-m2r:`<port-number>` format), Cilium Operator will resolve its address by looking up the clusterIP from Service resource.  Example values: 10.0.0.1:8081, spire-server.cilium-spire.svc:8081
-     - string
-     - ``nil``
-   * - :spelling:ignore:`authentication.mutual.spire.trustDomain`
-     - SPIFFE trust domain to use for fetching certificates
-     - string
-     - ``"spiffe.cilium"``
    * - :spelling:ignore:`autoDirectNodeRoutes`
      - Enable installation of PodCIDR routes between worker nodes if worker nodes share a common L2 network segment.
      - bool
@@ -479,7 +303,7 @@
    * - :spelling:ignore:`certgen`
      - Configure certificate generation for Hubble integration. If hubble.tls.auto.method=cronJob, these values are used for the Kubernetes CronJob which will be scheduled regularly to (re)generate any certificates not provided manually.
      - object
-     - ``{"affinity":{},"annotations":{"cronJob":{},"job":{}},"cronJob":{"failedJobsHistoryLimit":1,"successfulJobsHistoryLimit":3},"enforceCAValidityThroughoutLeavesDuration":true,"extraVolumeMounts":[],"extraVolumes":[],"generateCA":true,"image":{"digest":"sha256:14d29a176fc96d15b154559ce1a5baf01367c10baabfa7bb8028b72f087a56f0","override":null,"pullPolicy":"Always","repository":"quay.io/cilium/certgen","tag":"v0.4.11","useDigest":true},"nodeSelector":{},"podLabels":{},"priorityClassName":"","resources":{},"tolerations":[],"ttlSecondsAfterFinished":null}``
+     - ``{"affinity":{},"annotations":{"cronJob":{},"job":{}},"cronJob":{"failedJobsHistoryLimit":1,"successfulJobsHistoryLimit":3},"enforceCAValidityThroughoutLeavesDuration":true,"extraVolumeMounts":[],"extraVolumes":[],"generateCA":true,"image":{"digest":"sha256:f0c16ea8abe251d448a7fd04bdd93fe0f85fb1c3a456a455e05f7bb107dc2ff1","override":null,"pullPolicy":"Always","repository":"quay.io/cilium/certgen","tag":"v0.4.13","useDigest":true},"nodeSelector":{},"podLabels":{},"priorityClassName":"","resources":{},"tolerations":[],"ttlSecondsAfterFinished":null}``
    * - :spelling:ignore:`certgen.affinity`
      - Affinity for certgen
      - object
@@ -708,6 +532,10 @@
      - Configure the port the etcd metric server listens on.
      - int
      - ``9963``
+   * - :spelling:ignore:`clustermesh.apiserver.metrics.etcd.portName`
+     - Name of the etcd metrics container port.
+     - string
+     - ``"etcd-metrics"``
    * - :spelling:ignore:`clustermesh.apiserver.metrics.kvstoremesh.enabled`
      - Enables exporting KVStoreMesh metrics in OpenMetrics format.
      - bool
@@ -716,12 +544,24 @@
      - Configure the port the KVStoreMesh metric server listens on.
      - int
      - ``9964``
+   * - :spelling:ignore:`clustermesh.apiserver.metrics.kvstoremesh.portName`
+     - Name of the KVStoreMesh metrics container port.
+     - string
+     - ``"kvmesh-metrics"``
    * - :spelling:ignore:`clustermesh.apiserver.metrics.port`
      - Configure the port the apiserver metric server listens on.
      - int
      - ``9962``
+   * - :spelling:ignore:`clustermesh.apiserver.metrics.portName`
+     - Name of the clustermesh-apiserver metrics container port.
+     - string
+     - ``"apiserv-metrics"``
    * - :spelling:ignore:`clustermesh.apiserver.metrics.serviceMonitor.annotations`
      - Annotations to add to ServiceMonitor clustermesh-apiserver
+     - object
+     - ``{}``
+   * - :spelling:ignore:`clustermesh.apiserver.metrics.serviceMonitor.attachMetadata`
+     - Attach node metadata to the targets discovered by ServiceMonitor clustermesh-apiserver. ref: https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.AttachMetadata
      - object
      - ``{}``
    * - :spelling:ignore:`clustermesh.apiserver.metrics.serviceMonitor.enabled`
@@ -1256,10 +1096,6 @@
      - Pre-allocate ToFQDN identities. This reduces DNS proxy tail latency, at the potential cost of some unnecessary policymap entries. Disable this if you have a large (200+) number of unique ToFQDN selectors.
      - bool
      - ``true``
-   * - :spelling:ignore:`dnsProxy.preCache`
-     - DNS cache data at this path is preloaded on agent startup. (deprecated: will be removed in v1.21)
-     - string
-     - ``""``
    * - :spelling:ignore:`dnsProxy.proxyPort`
      - Global port on which the in-agent DNS proxy should listen. Default 0 is a OS-assigned port.
      - int
@@ -1387,7 +1223,7 @@
    * - :spelling:ignore:`encryption.ztunnel`
      - ztunnel encryption configuration. ztunnel is Istio's purpose-built, per-node proxy for handling L4 traffic in ambient mesh mode. These settings only apply when encryption.type is set to "ztunnel".
      - object
-     - ``{"affinity":{},"annotations":{},"ca":{"type":"internal"},"caAddress":"https://localhost:15012","extraEnv":[],"extraVolumeMounts":[],"extraVolumes":[],"healthPort":15021,"image":{"digest":"sha256:884de5adde400e39f58e36c7a729f7690466ca4a8eb4c2a8daa9c1c025115b24","override":null,"pullPolicy":"Always","repository":"quay.io/cilium/ztunnel","tag":"v1.0.0","useDigest":true},"minReadySeconds":0,"nodeSelector":{"kubernetes.io/os":"linux"},"podAnnotations":{},"podLabels":{},"priorityClassName":null,"readinessProbe":{"failureThreshold":3,"initialDelaySeconds":0,"periodSeconds":10},"resources":{"requests":{"cpu":"200m","memory":"512Mi"}},"secrets":{"bootstrapRootCert":null},"terminationGracePeriodSeconds":30,"tolerations":[{"effect":"NoSchedule","operator":"Exists"},{"key":"CriticalAddonsOnly","operator":"Exists"},{"effect":"NoExecute","operator":"Exists"}],"updateStrategy":{"rollingUpdate":{"maxSurge":1,"maxUnavailable":0},"type":"RollingUpdate"}}``
+     - ``{"affinity":{},"annotations":{},"ca":{"type":"internal"},"caAddress":"https://localhost:15012","extraEnv":[],"extraVolumeMounts":[],"extraVolumes":[],"healthPort":15021,"image":{"digest":"sha256:f712b1b809b9888b410629bd6b4c36f5e91978771de8991d82d8792840f477d5","override":null,"pullPolicy":"Always","repository":"quay.io/cilium/ztunnel","tag":"v1.1.0","useDigest":true},"minReadySeconds":0,"nodeSelector":{"kubernetes.io/os":"linux"},"podAnnotations":{},"podLabels":{},"priorityClassName":null,"readinessProbe":{"failureThreshold":3,"initialDelaySeconds":0,"periodSeconds":10},"resources":{"requests":{"cpu":"200m","memory":"512Mi"}},"secrets":{"bootstrapRootCert":null},"spire":{"adminSocketPath":"/run/spire/sockets/admin.sock","agentSocketPath":"/run/spire/sockets/agent/agent.sock","annotations":{},"connectionTimeout":"30s","install":{"agent":{"affinity":{},"annotations":{},"image":{"digest":"sha256:ab3a8ce70435374cc5d84c81eabf0278dc046ddbc0a736d59694ba9e5975b1b6","override":null,"pullPolicy":"Always","repository":"ghcr.io/spiffe/spire-agent","tag":"1.16.0","useDigest":true},"labels":{},"nodeSelector":{},"podSecurityContext":{},"priorityClassName":"","resources":{},"securityContext":{},"serviceAccount":{"create":true,"name":"spire-agent"},"skipKubeletVerification":true,"tolerations":[{"effect":"NoSchedule","key":"node.kubernetes.io/not-ready"},{"effect":"NoSchedule","key":"node-role.kubernetes.io/master"},{"effect":"NoSchedule","key":"node-role.kubernetes.io/control-plane"},{"key":"node-role.kubernetes.io/etcd","operator":"Exists"},{"effect":"NoSchedule","key":"node.cloudprovider.kubernetes.io/uninitialized","value":"true"},{"key":"CriticalAddonsOnly","operator":"Exists"}]},"enabled":true,"existingNamespace":false,"initImage":{"digest":"sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4","override":null,"pullPolicy":"Always","repository":"docker.io/library/busybox","tag":"1.38.0","useDigest":true},"namespace":"cilium-spire","server":{"affinity":{},"annotations":{},"ca":{"keyType":"rsa-4096","subject":{"commonName":"Cilium SPIRE CA","country":"US","organization":"SPIRE"}},"dataStorage":{"accessMode":"ReadWriteOnce","enabled":true,"size":"1Gi","storageClass":null},"image":{"digest":"sha256:ff546f4c62dafc479a0cd79eae9a7b6df2975754d75efd31706098e0d7548837","override":null,"pullPolicy":"Always","repository":"ghcr.io/spiffe/spire-server","tag":"1.16.0","useDigest":true},"initContainers":[],"labels":{},"nodeSelector":{},"podSecurityContext":{},"priorityClassName":"","resources":{},"securityContext":{},"service":{"annotations":{},"labels":{},"type":"ClusterIP"},"serviceAccount":{"create":true,"name":"spire-server"},"tolerations":[]}},"serverAddress":null,"trustDomain":"spiffe.cilium"},"terminationGracePeriodSeconds":30,"tolerations":[{"effect":"NoSchedule","operator":"Exists"},{"key":"CriticalAddonsOnly","operator":"Exists"},{"effect":"NoExecute","operator":"Exists"}],"updateStrategy":{"rollingUpdate":{"maxSurge":1,"maxUnavailable":0},"type":"RollingUpdate"}}``
    * - :spelling:ignore:`encryption.ztunnel.affinity`
      - Affinity for ztunnel pods.
      - object
@@ -1427,7 +1263,7 @@
    * - :spelling:ignore:`encryption.ztunnel.image`
      - ztunnel container image.
      - object
-     - ``{"digest":"sha256:884de5adde400e39f58e36c7a729f7690466ca4a8eb4c2a8daa9c1c025115b24","override":null,"pullPolicy":"Always","repository":"quay.io/cilium/ztunnel","tag":"v1.0.0","useDigest":true}``
+     - ``{"digest":"sha256:f712b1b809b9888b410629bd6b4c36f5e91978771de8991d82d8792840f477d5","override":null,"pullPolicy":"Always","repository":"quay.io/cilium/ztunnel","tag":"v1.1.0","useDigest":true}``
    * - :spelling:ignore:`encryption.ztunnel.minReadySeconds`
      - Minimum number of seconds for which a newly created ztunnel pod should be ready before it is considered available.
      - int
@@ -1464,6 +1300,178 @@
      - Base64-encoded bootstrap root certificate content. If not provided, the secret must be created manually before deploying. @schema type: [null, string] @schema
      - string
      - ``nil``
+   * - :spelling:ignore:`encryption.ztunnel.spire.adminSocketPath`
+     - SPIRE socket path where the SPIRE delegated api agent is listening
+     - string
+     - ``"/run/spire/sockets/admin.sock"``
+   * - :spelling:ignore:`encryption.ztunnel.spire.agentSocketPath`
+     - SPIRE socket path where the SPIRE workload agent is listening. Applies to both the Cilium Agent and Operator
+     - string
+     - ``"/run/spire/sockets/agent/agent.sock"``
+   * - :spelling:ignore:`encryption.ztunnel.spire.annotations`
+     - Annotations to be added to all top-level spire objects (resources under templates/spire)
+     - object
+     - ``{}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.connectionTimeout`
+     - SPIRE connection timeout
+     - string
+     - ``"30s"``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.agent.affinity`
+     - SPIRE agent affinity configuration
+     - object
+     - ``{}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.agent.annotations`
+     - SPIRE agent annotations
+     - object
+     - ``{}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.agent.image`
+     - SPIRE agent image
+     - object
+     - ``{"digest":"sha256:ab3a8ce70435374cc5d84c81eabf0278dc046ddbc0a736d59694ba9e5975b1b6","override":null,"pullPolicy":"Always","repository":"ghcr.io/spiffe/spire-agent","tag":"1.16.0","useDigest":true}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.agent.labels`
+     - SPIRE agent labels
+     - object
+     - ``{}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.agent.nodeSelector`
+     - SPIRE agent nodeSelector configuration ref: ref: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#nodeselector
+     - object
+     - ``{}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.agent.podSecurityContext`
+     - Security context to be added to spire agent pods. SecurityContext holds pod-level security attributes and common container settings. ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
+     - object
+     - ``{}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.agent.priorityClassName`
+     - The priority class to use for the spire agent
+     - string
+     - ``""``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.agent.resources`
+     - container resource limits & requests
+     - object
+     - ``{}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.agent.securityContext`
+     - Security context to be added to spire agent containers. SecurityContext holds pod-level security attributes and common container settings. ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-container
+     - object
+     - ``{}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.agent.serviceAccount`
+     - SPIRE agent service account
+     - object
+     - ``{"create":true,"name":"spire-agent"}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.agent.skipKubeletVerification`
+     - SPIRE Workload Attestor kubelet verification.
+     - bool
+     - ``true``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.agent.tolerations`
+     - SPIRE agent tolerations configuration By default it follows the same tolerations as the agent itself to allow the Cilium agent on this node to connect to SPIRE. ref: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
+     - list
+     - ``[{"effect":"NoSchedule","key":"node.kubernetes.io/not-ready"},{"effect":"NoSchedule","key":"node-role.kubernetes.io/master"},{"effect":"NoSchedule","key":"node-role.kubernetes.io/control-plane"},{"key":"node-role.kubernetes.io/etcd","operator":"Exists"},{"effect":"NoSchedule","key":"node.cloudprovider.kubernetes.io/uninitialized","value":"true"},{"key":"CriticalAddonsOnly","operator":"Exists"}]``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.enabled`
+     - Enable SPIRE installation. This only takes effect when encryption.enabled=true, encryption.type=ztunnel, and encryption.ztunnel.ca.type=spire.
+     - bool
+     - ``true``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.existingNamespace`
+     - SPIRE namespace already exists. Set to true if Helm should not create, manage, and import the SPIRE namespace.
+     - bool
+     - ``false``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.initImage`
+     - init container image of SPIRE agent and server
+     - object
+     - ``{"digest":"sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4","override":null,"pullPolicy":"Always","repository":"docker.io/library/busybox","tag":"1.38.0","useDigest":true}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.namespace`
+     - SPIRE namespace to install into
+     - string
+     - ``"cilium-spire"``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.server.affinity`
+     - SPIRE server affinity configuration
+     - object
+     - ``{}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.server.annotations`
+     - SPIRE server annotations
+     - object
+     - ``{}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.server.ca.keyType`
+     - SPIRE CA key type AWS requires the use of RSA. EC cryptography is not supported
+     - string
+     - ``"rsa-4096"``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.server.ca.subject`
+     - SPIRE CA Subject
+     - object
+     - ``{"commonName":"Cilium SPIRE CA","country":"US","organization":"SPIRE"}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.server.dataStorage.accessMode`
+     - Access mode of the SPIRE server data storage
+     - string
+     - ``"ReadWriteOnce"``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.server.dataStorage.enabled`
+     - Enable SPIRE server data storage
+     - bool
+     - ``true``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.server.dataStorage.size`
+     - Size of the SPIRE server data storage
+     - string
+     - ``"1Gi"``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.server.dataStorage.storageClass`
+     - StorageClass of the SPIRE server data storage
+     - string
+     - ``nil``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.server.image`
+     - SPIRE server image
+     - object
+     - ``{"digest":"sha256:ff546f4c62dafc479a0cd79eae9a7b6df2975754d75efd31706098e0d7548837","override":null,"pullPolicy":"Always","repository":"ghcr.io/spiffe/spire-server","tag":"1.16.0","useDigest":true}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.server.initContainers`
+     - SPIRE server init containers
+     - list
+     - ``[]``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.server.labels`
+     - SPIRE server labels
+     - object
+     - ``{}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.server.nodeSelector`
+     - SPIRE server nodeSelector configuration ref: ref: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#nodeselector
+     - object
+     - ``{}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.server.podSecurityContext`
+     - Security context to be added to spire server pods. SecurityContext holds pod-level security attributes and common container settings. ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
+     - object
+     - ``{}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.server.priorityClassName`
+     - The priority class to use for the spire server
+     - string
+     - ``""``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.server.resources`
+     - container resource limits & requests
+     - object
+     - ``{}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.server.securityContext`
+     - Security context to be added to spire server containers. SecurityContext holds pod-level security attributes and common container settings. ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-container
+     - object
+     - ``{}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.server.service.annotations`
+     - Annotations to be added to the SPIRE server service
+     - object
+     - ``{}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.server.service.labels`
+     - Labels to be added to the SPIRE server service
+     - object
+     - ``{}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.server.service.type`
+     - Service type for the SPIRE server service
+     - string
+     - ``"ClusterIP"``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.server.serviceAccount`
+     - SPIRE server service account
+     - object
+     - ``{"create":true,"name":"spire-server"}``
+   * - :spelling:ignore:`encryption.ztunnel.spire.install.server.tolerations`
+     - SPIRE server tolerations configuration ref: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
+     - list
+     - ``[]``
+   * - :spelling:ignore:`encryption.ztunnel.spire.serverAddress`
+     - SPIRE server address used by Cilium Operator  If k8s Service DNS along with port number is used (e.g. :raw-html-m2r:`<service-name>`.\ :raw-html-m2r:`<namespace>`.svc(.*):\ :raw-html-m2r:`<port-number>` format), Cilium Operator will resolve its address by looking up the clusterIP from Service resource.  Example values: 10.0.0.1:8081, spire-server.cilium-spire.svc:8081
+     - string
+     - ``nil``
+   * - :spelling:ignore:`encryption.ztunnel.spire.trustDomain`
+     - SPIFFE trust domain to use for fetching certificates
+     - string
+     - ``"spiffe.cilium"``
    * - :spelling:ignore:`encryption.ztunnel.terminationGracePeriodSeconds`
      - Configure termination grace period for ztunnel DaemonSet.
      - int
@@ -1497,7 +1505,7 @@
      - bool
      - ``false``
    * - :spelling:ignore:`eni.awsReleaseExcessIPs`
-     - Release IPs not used from the ENI
+     - Release IPs not used from the ENI (deprecated, please use 'ipam.operator.releaseExcessIPs' instead)
      - bool
      - ``false``
    * - :spelling:ignore:`eni.ec2APIEndpoint`
@@ -1671,7 +1679,7 @@
    * - :spelling:ignore:`envoy.image`
      - Envoy container image.
      - object
-     - ``{"digest":"sha256:39a86953505b46d8a8e1ee4add26d955d5ba1accf5e4fa60197c8155e5ac2b5e","override":null,"pullPolicy":"Always","repository":"quay.io/cilium/cilium-envoy","tag":"v1.38.4-1789396437-a6bb974d7ad015d17b46eb44fdd7bbfe8256c089","useDigest":true}``
+     - ``{"digest":"sha256:683ce70e9c67d194164a2525a1115e4b6571c0d3f5a41be6f4c07e18618538f9","override":null,"pullPolicy":"Always","repository":"quay.io/cilium/cilium-envoy","tag":"v1.40.2-1793367197-e19484665a61a41d63009f0ce1bc5cf0e218803c","useDigest":true}``
    * - :spelling:ignore:`envoy.initContainers`
      - Init containers added to the cilium Envoy DaemonSet.
      - list
@@ -1779,7 +1787,7 @@
    * - :spelling:ignore:`envoy.prometheus`
      - Configure Cilium Envoy Prometheus options. Note that some of these apply to either cilium-agent or cilium-envoy.
      - object
-     - ``{"enabled":true,"port":"9964","serviceMonitor":{"annotations":{},"enabled":false,"interval":"10s","labels":{},"metricRelabelings":null,"relabelings":[{"action":"replace","replacement":"${1}","sourceLabels":["__meta_kubernetes_pod_node_name"],"targetLabel":"node"}],"scrapeTimeout":null}}``
+     - ``{"enabled":true,"port":"9964","portName":"envoy-metrics","serviceMonitor":{"annotations":{},"attachMetadata":{},"enabled":false,"interval":"10s","labels":{},"metricRelabelings":null,"relabelings":[{"action":"replace","replacement":"${1}","sourceLabels":["__meta_kubernetes_pod_node_name"],"targetLabel":"node"}],"scrapeTimeout":null}}``
    * - :spelling:ignore:`envoy.prometheus.enabled`
      - Enable prometheus metrics for cilium-envoy
      - bool
@@ -1788,8 +1796,16 @@
      - Serve prometheus metrics for cilium-envoy on the configured port
      - string
      - ``"9964"``
+   * - :spelling:ignore:`envoy.prometheus.portName`
+     - Name of the Envoy Prometheus container port, for both standalone and embedded Envoy.
+     - string
+     - ``"envoy-metrics"``
    * - :spelling:ignore:`envoy.prometheus.serviceMonitor.annotations`
      - Annotations to add to ServiceMonitor cilium-envoy
+     - object
+     - ``{}``
+   * - :spelling:ignore:`envoy.prometheus.serviceMonitor.attachMetadata`
+     - Attach node metadata to the targets discovered by ServiceMonitor cilium-envoy. ref: https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.AttachMetadata
      - object
      - ``{}``
    * - :spelling:ignore:`envoy.prometheus.serviceMonitor.enabled`
@@ -1901,7 +1917,7 @@
      - bool
      - ``true``
    * - :spelling:ignore:`envoy.xdsMode`
-     - xDS server operating mode for Envoy proxy configuration. Supported values are: "split" for the existing per-resource-type xDS, "delta-split" for incremental Delta xDS, "ads" for the ADS (Aggregated Discovery Service) xDS, and "strict-ads" for ADS with strict snapshot cache behavior and generated snapshot consistency checks. Null value omits setting this option. Cilium Agent defaults missing option to "split" to keep upgrades in the legacy mode.
+     - xDS server operating mode for Envoy proxy configuration. Supported values are: "split" for the existing per-resource-type xDS, "delta-split" for incremental Delta xDS, "ads" for the ADS (Aggregated Discovery Service) xDS, and "strict-ads" as a compatibility alias for "ads". Null value omits setting this option. Cilium Agent defaults missing option to "split" to keep upgrades in the legacy mode.
      - string
      - ``ads`` for new 1.20+ installations; none when ``upgradeCompatibility`` is set below ``1.20``
    * - :spelling:ignore:`envoy.xffNumTrustedHopsL7PolicyEgress`
@@ -2012,6 +2028,10 @@
      - Specify the labels of the nodes where the Ingress listeners should be exposed  matchLabels:   kubernetes.io/os: linux   kubernetes.io/hostname: kind-worker
      - object
      - ``{}``
+   * - :spelling:ignore:`gatewayAPI.inferenceExtension.enabled`
+     - 
+     - bool
+     - ``false``
    * - :spelling:ignore:`gatewayAPI.secretsNamespace`
      - SecretsNamespace is the namespace in which envoy SDS will retrieve TLS secrets from.
      - object
@@ -2131,7 +2151,7 @@
    * - :spelling:ignore:`hubble.metrics`
      - Hubble metrics configuration. See https://docs.cilium.io/en/stable/observability/metrics/#hubble-metrics for more comprehensive documentation about Hubble metrics.
      - object
-     - ``{"dashboards":{"annotations":{},"enabled":false,"label":"grafana_dashboard","labelValue":"1","namespace":null},"dynamic":{"config":{"configMapName":"cilium-dynamic-metrics-config","content":[],"createConfigMap":true},"enabled":false},"enableOpenMetrics":false,"enabled":null,"port":9965,"serviceAnnotations":{},"serviceMonitor":{"annotations":{},"enabled":false,"interval":"10s","jobLabel":"","labels":{},"metricRelabelings":null,"relabelings":[{"action":"replace","replacement":"${1}","sourceLabels":["__meta_kubernetes_pod_node_name"],"targetLabel":"node"}],"scrapeTimeout":null,"tlsConfig":{}},"tls":{"enabled":false,"server":{"cert":"","existingSecret":"","extraDnsNames":[],"extraIpAddresses":[],"key":"","mtls":{"enabled":false,"key":"ca.crt","name":null,"useSecret":false}}}}``
+     - ``{"dashboards":{"annotations":{},"enabled":false,"label":"grafana_dashboard","labelValue":"1","namespace":null},"dynamic":{"config":{"configMapName":"cilium-dynamic-metrics-config","content":[],"createConfigMap":true},"enabled":false},"enableOpenMetrics":false,"enabled":null,"port":9965,"portName":"hubble-metrics","serviceAnnotations":{},"serviceMonitor":{"annotations":{},"attachMetadata":{},"enabled":false,"interval":"10s","jobLabel":"","labels":{},"metricRelabelings":null,"relabelings":[{"action":"replace","replacement":"${1}","sourceLabels":["__meta_kubernetes_pod_node_name"],"targetLabel":"node"}],"scrapeTimeout":null,"tlsConfig":{}},"tls":{"enabled":false,"server":{"cert":"","existingSecret":"","extraDnsNames":[],"extraIpAddresses":[],"key":"","mtls":{"enabled":false,"key":"ca.crt","name":null,"useSecret":false}}}}``
    * - :spelling:ignore:`hubble.metrics.dashboards`
      - Grafana dashboards for hubble grafana can import dashboards based on the label and value ref: https://github.com/grafana/helm-charts/tree/main/charts/grafana#sidecar-for-dashboards
      - object
@@ -2160,12 +2180,20 @@
      - Configure the port the hubble metric server listens on.
      - int
      - ``9965``
+   * - :spelling:ignore:`hubble.metrics.portName`
+     - Name of the Hubble metrics container port.
+     - string
+     - ``"hubble-metrics"``
    * - :spelling:ignore:`hubble.metrics.serviceAnnotations`
      - Annotations to be added to hubble-metrics service.
      - object
      - ``{}``
    * - :spelling:ignore:`hubble.metrics.serviceMonitor.annotations`
      - Annotations to add to ServiceMonitor hubble
+     - object
+     - ``{}``
+   * - :spelling:ignore:`hubble.metrics.serviceMonitor.attachMetadata`
+     - Attach node metadata to the targets discovered by ServiceMonitor hubble. ref: https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.AttachMetadata
      - object
      - ``{}``
    * - :spelling:ignore:`hubble.metrics.serviceMonitor.enabled`
@@ -2383,9 +2411,17 @@
    * - :spelling:ignore:`hubble.relay.prometheus`
      - Enable prometheus metrics for hubble-relay on the configured port at /metrics
      - object
-     - ``{"enabled":false,"port":9966,"serviceMonitor":{"annotations":{},"enabled":false,"interval":"10s","labels":{},"metricRelabelings":null,"relabelings":null,"scrapeTimeout":null}}``
+     - ``{"enabled":false,"port":9966,"portName":"prometheus","serviceMonitor":{"annotations":{},"attachMetadata":{},"enabled":false,"interval":"10s","labels":{},"metricRelabelings":null,"relabelings":null,"scrapeTimeout":null}}``
+   * - :spelling:ignore:`hubble.relay.prometheus.portName`
+     - Name of the hubble-relay Prometheus container port.
+     - string
+     - ``"prometheus"``
    * - :spelling:ignore:`hubble.relay.prometheus.serviceMonitor.annotations`
      - Annotations to add to ServiceMonitor hubble-relay
+     - object
+     - ``{}``
+   * - :spelling:ignore:`hubble.relay.prometheus.serviceMonitor.attachMetadata`
+     - Attach node metadata to the targets discovered by ServiceMonitor hubble-relay. ref: https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.AttachMetadata
      - object
      - ``{}``
    * - :spelling:ignore:`hubble.relay.prometheus.serviceMonitor.enabled`
@@ -2549,7 +2585,7 @@
      - string
      - ``"helm"``
    * - :spelling:ignore:`hubble.tls.auto.privateKey`
-     - Private key options. These include the key algorithm and size, the used encoding and the rotation policy used when hubble.tls.auto.method=certmanager. https://cert-manager.io/docs/reference/api-docs/#cert-manager.io/v1.CertificatePrivateKey
+     - Private key options. These include the key algorithm and size, the used encoding and the rotation policy used when hubble.tls.auto.method=certmanager. ``rotationPolicy`` defaults to ``Always`` unless set here. https://cert-manager.io/docs/reference/api-docs/#cert-manager.io/v1.CertificatePrivateKey
      - object
      - ``{}``
    * - :spelling:ignore:`hubble.tls.auto.schedule`
@@ -2879,7 +2915,7 @@
    * - :spelling:ignore:`ingressController.service`
      - Load-balancer service in shared mode. This is a single load-balancer service for all Ingress resources.
      - object
-     - ``{"allocateLoadBalancerNodePorts":null,"annotations":{},"externalTrafficPolicy":"Cluster","insecureNodePort":null,"labels":{},"loadBalancerClass":null,"loadBalancerIP":null,"name":"cilium-ingress","secureNodePort":null,"type":"LoadBalancer"}``
+     - ``{"allocateLoadBalancerNodePorts":null,"annotations":{},"externalTrafficPolicy":"Cluster","insecureNodePort":null,"insecurePortEnabled":true,"labels":{},"loadBalancerClass":null,"loadBalancerIP":null,"name":"cilium-ingress","secureNodePort":null,"securePortEnabled":true,"type":"LoadBalancer"}``
    * - :spelling:ignore:`ingressController.service.allocateLoadBalancerNodePorts`
      - Configure if node port allocation is required for LB service ref: https://kubernetes.io/docs/concepts/services-networking/service/#load-balancer-nodeport-allocation
      - string
@@ -2896,6 +2932,10 @@
      - Configure a specific nodePort for insecure HTTP traffic on the shared LB service
      - string
      - ``nil``
+   * - :spelling:ignore:`ingressController.service.insecurePortEnabled`
+     - Configure whether the insecure HTTP port (80) is exposed on the shared LB service. Set it to false to keep cloud load balancers from creating a plain HTTP listener.
+     - bool
+     - ``true``
    * - :spelling:ignore:`ingressController.service.labels`
      - Labels to be added for the shared LB service
      - object
@@ -2916,6 +2956,10 @@
      - Configure a specific nodePort for secure HTTPS traffic on the shared LB service
      - string
      - ``nil``
+   * - :spelling:ignore:`ingressController.service.securePortEnabled`
+     - Configure whether the secure HTTPS port (443) is exposed on the shared LB service.
+     - bool
+     - ``true``
    * - :spelling:ignore:`ingressController.service.type`
      - Service type for the shared LB service
      - string
@@ -2996,6 +3040,10 @@
      - IPv6 CIDR list range to delegate to individual nodes for IPAM.
      - list
      - ``["fd00::/104"]``
+   * - :spelling:ignore:`ipam.operator.excessIPReleaseDelay`
+     - Number of seconds the operator waits before releasing an IP address previously marked as excess.
+     - int
+     - ``180``
    * - :spelling:ignore:`ipam.operator.externalAPILimitBurstSize`
      - The maximum burst size when rate limiting access to external APIs. Also known as the token bucket capacity.
      - int
@@ -3004,6 +3052,10 @@
      - The maximum queries per second when rate limiting access to external APIs. Also known as the bucket refill rate, which is used to refill the bucket up to the burst size capacity.
      - float
      - ``4.0``
+   * - :spelling:ignore:`ipam.operator.releaseExcessIPs`
+     - Release excess IP addresses from cloud provider interfaces.
+     - bool
+     - ``false``
    * - :spelling:ignore:`iptablesRandomFully`
      - Configure iptables--random-fully. Disabled by default. View https://github.com/cilium/cilium/issues/13037 for more information.
      - bool
@@ -3343,7 +3395,7 @@
    * - :spelling:ignore:`nodeinit.image`
      - node-init image.
      - object
-     - ``{"digest":"sha256:f99e2beda7324e93ba04d6240d9626a6b9ab023d7d56e3b029d3d9c823ce63ef","override":null,"pullPolicy":"Always","repository":"quay.io/cilium/startup-script","tag":"1782916218-36ae25f","useDigest":true}``
+     - ``{"digest":"sha256:f6d8cc0d4210ef3905631994d5b4c906d35580c9d928f778aa489f51edd2bdd6","override":null,"pullPolicy":"Always","repository":"quay.io/cilium/startup-script","tag":"1793630414-e47a187","useDigest":true}``
    * - :spelling:ignore:`nodeinit.minReadySeconds`
      - Minimum number of seconds for which a newly created node-init pod should be ready before it is considered available.
      - int
@@ -3531,9 +3583,17 @@
    * - :spelling:ignore:`operator.prometheus`
      - Enable prometheus metrics for cilium-operator on the configured port at /metrics
      - object
-     - ``{"enabled":true,"metricsService":false,"port":9963,"serviceMonitor":{"annotations":{},"enabled":false,"interval":"10s","jobLabel":"","labels":{},"metricRelabelings":null,"relabelings":null,"scrapeTimeout":null},"tls":{"enabled":false,"server":{"existingSecret":"","mtls":{"enabled":false}}}}``
+     - ``{"enabled":true,"metricsService":false,"port":9963,"portName":"prometheus","serviceMonitor":{"annotations":{},"attachMetadata":{},"enabled":false,"interval":"10s","jobLabel":"","labels":{},"metricRelabelings":null,"relabelings":null,"scrapeTimeout":null},"tls":{"enabled":false,"server":{"existingSecret":"","mtls":{"enabled":false}}}}``
+   * - :spelling:ignore:`operator.prometheus.portName`
+     - Name of the cilium-operator Prometheus container port.
+     - string
+     - ``"prometheus"``
    * - :spelling:ignore:`operator.prometheus.serviceMonitor.annotations`
      - Annotations to add to ServiceMonitor cilium-operator
+     - object
+     - ``{}``
+   * - :spelling:ignore:`operator.prometheus.serviceMonitor.attachMetadata`
+     - Attach node metadata to the targets discovered by ServiceMonitor cilium-operator. ref: https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.AttachMetadata
      - object
      - ``{}``
    * - :spelling:ignore:`operator.prometheus.serviceMonitor.enabled`
@@ -3607,7 +3667,7 @@
    * - :spelling:ignore:`operator.tolerations`
      - Node tolerations for cilium-operator scheduling to nodes with taints ref: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/ Toleration for agentNotReadyTaintKey taint is always added to cilium-operator pods. @schema type: [null, array] @schema
      - list
-     - ``[{"key":"node-role.kubernetes.io/control-plane","operator":"Exists"},{"key":"node-role.kubernetes.io/master","operator":"Exists"},{"key":"node.kubernetes.io/not-ready","operator":"Exists"},{"key":"node.cloudprovider.kubernetes.io/uninitialized","operator":"Exists"}]``
+     - ``[{"key":"node-role.kubernetes.io/control-plane","operator":"Exists"},{"key":"node-role.kubernetes.io/master","operator":"Exists"},{"key":"node-role.kubernetes.io/etcd","operator":"Exists"},{"key":"node.kubernetes.io/not-ready","operator":"Exists"},{"key":"node.cloudprovider.kubernetes.io/uninitialized","operator":"Exists"}]``
    * - :spelling:ignore:`operator.topologySpreadConstraints`
      - Pod topology spread constraints for cilium-operator
      - list
@@ -3703,7 +3763,7 @@
    * - :spelling:ignore:`preflight.envoy.image`
      - Envoy pre-flight image.
      - object
-     - ``{"digest":"sha256:39a86953505b46d8a8e1ee4add26d955d5ba1accf5e4fa60197c8155e5ac2b5e","override":null,"pullPolicy":"Always","repository":"quay.io/cilium/cilium-envoy","tag":"v1.38.4-1789396437-a6bb974d7ad015d17b46eb44fdd7bbfe8256c089","useDigest":true}``
+     - ``{"digest":"sha256:683ce70e9c67d194164a2525a1115e4b6571c0d3f5a41be6f4c07e18618538f9","override":null,"pullPolicy":"Always","repository":"quay.io/cilium/cilium-envoy","tag":"v1.40.2-1793367197-e19484665a61a41d63009f0ce1bc5cf0e218803c","useDigest":true}``
    * - :spelling:ignore:`preflight.extraEnv`
      - Additional preflight environment variables.
      - list
@@ -3795,7 +3855,7 @@
    * - :spelling:ignore:`prometheus`
      - Configure prometheus metrics on the configured port at /metrics
      - object
-     - ``{"controllerGroupMetrics":["write-cni-file","sync-host-ips","sync-lb-maps-with-k8s-services"],"enabled":false,"metrics":null,"metricsService":false,"port":9962,"serviceMonitor":{"annotations":{},"enabled":false,"interval":"10s","jobLabel":"","labels":{},"metricRelabelings":null,"relabelings":[{"action":"replace","replacement":"${1}","sourceLabels":["__meta_kubernetes_pod_node_name"],"targetLabel":"node"}],"scrapeTimeout":null,"trustCRDsExist":false}}``
+     - ``{"controllerGroupMetrics":["write-cni-file","sync-host-ips","sync-lb-maps-with-k8s-services"],"enabled":false,"metrics":null,"metricsService":false,"port":9962,"portName":"prometheus","serviceMonitor":{"annotations":{},"attachMetadata":{},"enabled":false,"interval":"10s","jobLabel":"","labels":{},"metricRelabelings":null,"relabelings":[{"action":"replace","replacement":"${1}","sourceLabels":["__meta_kubernetes_pod_node_name"],"targetLabel":"node"}],"scrapeTimeout":null,"trustCRDsExist":false}}``
    * - :spelling:ignore:`prometheus.controllerGroupMetrics`
      - - Enable controller group metrics for monitoring specific Cilium subsystems. The list is a list of controller group names. The special values of "all" and "none" are supported. The set of controller group names is not guaranteed to be stable between Cilium versions.
      - list
@@ -3804,8 +3864,16 @@
      - Metrics that should be enabled or disabled from the default metric list. The list is expected to be separated by a space. (+metric_foo to enable metric_foo , -metric_bar to disable metric_bar). ref: https://docs.cilium.io/en/stable/observability/metrics/
      - string
      - ``nil``
+   * - :spelling:ignore:`prometheus.portName`
+     - Name of the cilium-agent Prometheus container port.
+     - string
+     - ``"prometheus"``
    * - :spelling:ignore:`prometheus.serviceMonitor.annotations`
      - Annotations to add to ServiceMonitor cilium-agent
+     - object
+     - ``{}``
+   * - :spelling:ignore:`prometheus.serviceMonitor.attachMetadata`
+     - Attach node metadata to the targets discovered by ServiceMonitor cilium-agent. ref: https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.AttachMetadata
      - object
      - ``{}``
    * - :spelling:ignore:`prometheus.serviceMonitor.enabled`

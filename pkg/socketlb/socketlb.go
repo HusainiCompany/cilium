@@ -68,7 +68,9 @@ func cgroupPluginsLinkPath() string {
 
 func attachmentContextSocket() *datapathplugins.AttachmentContext {
 	return &datapathplugins.AttachmentContext{
-		Context: &datapathplugins.AttachmentContext_Socket_{},
+		Context: &datapathplugins.AttachmentContext_Socket_{
+			Socket: &datapathplugins.AttachmentContext_Socket{},
+		},
 	}
 }
 
@@ -96,7 +98,9 @@ func Enable(ctx context.Context, logger *slog.Logger, reg *registry.MapRegistry,
 	cfg := config.NewBPFSock(config.NodeConfig(lnc))
 	cfg.DisableExternalIPMitigation = option.Config.DisableExternalIPMitigation
 	cfg.EnableNoServiceEndpointsRoutable = lnc.SvcRouteConfig.EnableNoServiceEndpointsRoutable
-	cfg.EnableLRP = option.Config.EnableLocalRedirectPolicy
+	cfg.EnableLRP = lnc.EnableLocalRedirectPolicy
+	cfg.EnableNAT46X64 = option.Config.NodePortNat46X64 && lnc.KPRConfig.KubeProxyReplacement
+	cfg.EnableNAT46X64Gateway = option.Config.EnableNat46X64Gateway && lnc.KPRConfig.KubeProxyReplacement
 
 	cfg.TunnelProtocol = lnc.TunnelProtocol
 	cfg.TunnelPort = lnc.TunnelPort
@@ -118,10 +122,15 @@ func Enable(ctx context.Context, logger *slog.Logger, reg *registry.MapRegistry,
 		cfg.HostNetNSCookie = cookie
 	}
 
-	cfg.EnableSocketLBTracing = option.Config.UnsafeDaemonConfigOption.EnableSocketLBTracing
 	cfg.EnableVTEP = option.Config.EnableVTEP
 	if option.Config.EnableVTEP {
 		cfg.VTEPMask = byteorder.NetIPAddrToHost32(option.Config.VtepCidrMask)
+	}
+
+	if lnc.KPRConfig.EnableSocketLB {
+		cfg.SocketLB.EnableFull = !option.Config.UnsafeDaemonConfigOption.BPFSocketLBHostnsOnly
+		cfg.SocketLB.HostNSOnly = option.Config.UnsafeDaemonConfigOption.BPFSocketLBHostnsOnly
+		cfg.SocketLB.EnableTracing = option.Config.UnsafeDaemonConfigOption.EnableSocketLBTracing
 	}
 
 	cfg.EnableServiceNoBackendResponse = option.Config.ServiceNoBackendResponseEnabled()

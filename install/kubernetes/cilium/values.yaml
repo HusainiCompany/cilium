@@ -1035,6 +1035,11 @@ ingressController:
     annotations: {}
     # -- Service type for the shared LB service
     type: LoadBalancer
+    # -- Configure whether the insecure HTTP port (80) is exposed on the shared LB service.
+    # Set it to false to keep cloud load balancers from creating a plain HTTP listener.
+    insecurePortEnabled: true
+    # -- Configure whether the secure HTTPS port (443) is exposed on the shared LB service.
+    securePortEnabled: true
     # @schema
     # type: [null, integer]
     # @schema
@@ -1140,6 +1145,9 @@ gatewayAPI:
       #   kubernetes.io/os: linux
       #   kubernetes.io/hostname: kind-worker
       matchLabels: {}
+  # Enable Gateway API Inference Extension feature
+  inferenceExtension:
+    enabled: false
 # -- Enables the fallback compatibility solution for when the xt_socket kernel
 # module is missing and it is needed for the datapath L7 redirection to work
 # properly. See documentation for details on when this can be disabled:
@@ -1199,6 +1207,181 @@ encryption:
       # then manages SPIRE entries for enrolled namespaces). "internal" uses
       # Cilium's built-in CA and skips the SPIRE enrollment reconciler.
       type: internal
+    # Settings for SPIRE when encryption.ztunnel.ca.type is "spire".
+    spire:
+      # -- Annotations to be added to all top-level spire objects (resources under templates/spire)
+      annotations: {}
+      # Settings to control the SPIRE installation and configuration
+      install:
+        # -- Enable SPIRE installation.
+        # This only takes effect when encryption.enabled=true, encryption.type=ztunnel,
+        # and encryption.ztunnel.ca.type=spire.
+        enabled: true
+        # -- SPIRE namespace to install into
+        namespace: cilium-spire
+        # -- SPIRE namespace already exists. Set to true if Helm should not create, manage, and import the SPIRE namespace.
+        existingNamespace: false
+        # -- init container image of SPIRE agent and server
+        initImage:
+          # @schema
+          # type: [null, string]
+          # @schema
+          override: ~
+          repository: "docker.io/library/busybox"
+          tag: "1.38.0"
+          digest: "sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4"
+          useDigest: true
+          pullPolicy: "Always"
+        # SPIRE agent configuration
+        agent:
+          # -- The priority class to use for the spire agent
+          priorityClassName: ""
+          # -- SPIRE agent image
+          image:
+            # @schema
+            # type: [null, string]
+            # @schema
+            override: ~
+            repository: "ghcr.io/spiffe/spire-agent"
+            tag: "1.16.0"
+            digest: "sha256:ab3a8ce70435374cc5d84c81eabf0278dc046ddbc0a736d59694ba9e5975b1b6"
+            useDigest: true
+            pullPolicy: "Always"
+          # -- SPIRE agent service account
+          serviceAccount:
+            create: true
+            name: spire-agent
+          # -- SPIRE agent annotations
+          annotations: {}
+          # -- SPIRE agent labels
+          labels: {}
+          # -- container resource limits & requests
+          resources: {}
+          # -- SPIRE Workload Attestor kubelet verification.
+          skipKubeletVerification: true
+          # -- SPIRE agent tolerations configuration
+          # By default it follows the same tolerations as the agent itself
+          # to allow the Cilium agent on this node to connect to SPIRE.
+          # ref: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
+          tolerations:
+            - key: node.kubernetes.io/not-ready
+              effect: NoSchedule
+            - key: node-role.kubernetes.io/master
+              effect: NoSchedule
+            - key: node-role.kubernetes.io/control-plane
+              effect: NoSchedule
+            - key: node-role.kubernetes.io/etcd
+              operator: Exists
+            - key: node.cloudprovider.kubernetes.io/uninitialized
+              effect: NoSchedule
+              value: "true"
+            - key: CriticalAddonsOnly
+              operator: "Exists"
+          # -- SPIRE agent affinity configuration
+          affinity: {}
+          # -- SPIRE agent nodeSelector configuration
+          # ref: ref: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#nodeselector
+          nodeSelector: {}
+          # -- Security context to be added to spire agent pods.
+          # SecurityContext holds pod-level security attributes and common container settings.
+          # ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
+          podSecurityContext: {}
+          # -- Security context to be added to spire agent containers.
+          # SecurityContext holds pod-level security attributes and common container settings.
+          # ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-container
+          securityContext: {}
+        server:
+          # -- The priority class to use for the spire server
+          priorityClassName: ""
+          # -- SPIRE server image
+          image:
+            # @schema
+            # type: [null, string]
+            # @schema
+            override: ~
+            repository: "ghcr.io/spiffe/spire-server"
+            tag: "1.16.0"
+            digest: "sha256:ff546f4c62dafc479a0cd79eae9a7b6df2975754d75efd31706098e0d7548837"
+            useDigest: true
+            pullPolicy: "Always"
+          # -- SPIRE server service account
+          serviceAccount:
+            create: true
+            name: spire-server
+          # -- SPIRE server init containers
+          initContainers: []
+          # -- SPIRE server annotations
+          annotations: {}
+          # -- SPIRE server labels
+          labels: {}
+          # SPIRE server service configuration
+          # -- container resource limits & requests
+          resources: {}
+          service:
+            # -- Service type for the SPIRE server service
+            type: ClusterIP
+            # -- Annotations to be added to the SPIRE server service
+            annotations: {}
+            # -- Labels to be added to the SPIRE server service
+            labels: {}
+          # -- SPIRE server affinity configuration
+          affinity: {}
+          # -- SPIRE server nodeSelector configuration
+          # ref: ref: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#nodeselector
+          nodeSelector: {}
+          # -- SPIRE server tolerations configuration
+          # ref: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
+          tolerations: []
+          # SPIRE server datastorage configuration
+          dataStorage:
+            # -- Enable SPIRE server data storage
+            enabled: true
+            # -- Size of the SPIRE server data storage
+            size: 1Gi
+            # -- Access mode of the SPIRE server data storage
+            accessMode: ReadWriteOnce
+            # @schema
+            # type: [null, string]
+            # @schema
+            # -- StorageClass of the SPIRE server data storage
+            storageClass: null
+          # -- Security context to be added to spire server pods.
+          # SecurityContext holds pod-level security attributes and common container settings.
+          # ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
+          podSecurityContext: {}
+          # -- Security context to be added to spire server containers.
+          # SecurityContext holds pod-level security attributes and common container settings.
+          # ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-container
+          securityContext: {}
+          # SPIRE CA configuration
+          ca:
+            # -- SPIRE CA key type
+            # AWS requires the use of RSA. EC cryptography is not supported
+            keyType: "rsa-4096"
+            # -- SPIRE CA Subject
+            subject:
+              country: "US"
+              organization: "SPIRE"
+              commonName: "Cilium SPIRE CA"
+      # @schema
+      # type: [null, string]
+      # @schema
+      # -- SPIRE server address used by Cilium Operator
+      #
+      # If k8s Service DNS along with port number is used (e.g. <service-name>.<namespace>.svc(.*):<port-number> format),
+      # Cilium Operator will resolve its address by looking up the clusterIP from Service resource.
+      #
+      # Example values: 10.0.0.1:8081, spire-server.cilium-spire.svc:8081
+      serverAddress: ~
+      # -- SPIFFE trust domain to use for fetching certificates
+      trustDomain: spiffe.cilium
+      # -- SPIRE socket path where the SPIRE delegated api agent is listening
+      adminSocketPath: /run/spire/sockets/admin.sock
+      # -- SPIRE socket path where the SPIRE workload agent is listening.
+      # Applies to both the Cilium Agent and Operator
+      agentSocketPath: /run/spire/sockets/agent/agent.sock
+      # -- SPIRE connection timeout
+      connectionTimeout: 30s
     # -- ztunnel container image.
     image:
       # @schema
@@ -1206,9 +1389,9 @@ encryption:
       # @schema
       override: ~
       repository: "quay.io/cilium/ztunnel"
-      tag: "v1.0.0"
+      tag: "v1.1.0"
       pullPolicy: "Always"
-      digest: "sha256:884de5adde400e39f58e36c7a729f7690466ca4a8eb4c2a8daa9c1c025115b24"
+      digest: "sha256:f712b1b809b9888b410629bd6b4c36f5e91978771de8991d82d8792840f477d5"
       useDigest: true
     # -- CA server address for certificate requests.
     caAddress: "https://localhost:15012"
@@ -1296,7 +1479,7 @@ endpointLockdownOnMapOverflow: false
 eni:
   # -- Enable Elastic Network Interface (ENI) integration.
   enabled: false
-  # -- Release IPs not used from the ENI
+  # -- Release IPs not used from the ENI (deprecated, please use 'ipam.operator.releaseExcessIPs' instead)
   awsReleaseExcessIPs: false
   # -- Enable ENI prefix delegation
   awsEnablePrefixDelegation: false
@@ -1404,8 +1587,8 @@ certgen:
     # @schema
     override: ~
     repository: "quay.io/cilium/certgen"
-    tag: "v0.4.11"
-    digest: "sha256:14d29a176fc96d15b154559ce1a5baf01367c10baabfa7bb8028b72f087a56f0"
+    tag: "v0.4.13"
+    digest: "sha256:f0c16ea8abe251d448a7fd04bdd93fe0f85fb1c3a456a455e05f7bb107dc2ff1"
     useDigest: true
     pullPolicy: "Always"
   # @schema
@@ -1496,6 +1679,8 @@ hubble:
     enableOpenMetrics: false
     # -- Configure the port the hubble metric server listens on.
     port: 9965
+    # -- Name of the Hubble metrics container port.
+    portName: hubble-metrics
     tls:
       # Enable hubble metrics server TLS.
       enabled: false
@@ -1541,6 +1726,9 @@ hubble:
       labels: {}
       # -- Annotations to add to ServiceMonitor hubble
       annotations: {}
+      # -- Attach node metadata to the targets discovered by ServiceMonitor hubble.
+      # ref: https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.AttachMetadata
+      attachMetadata: {}
       # -- jobLabel to add for ServiceMonitor hubble
       jobLabel: ""
       # -- Interval for scrape metrics.
@@ -1740,6 +1928,7 @@ hubble:
       # privateKey:
       #   algorithm: ECDSA
       # -- Private key options. These include the key algorithm and size, the used encoding and the rotation policy used when hubble.tls.auto.method=certmanager.
+      # `rotationPolicy` defaults to `Always` unless set here.
       # https://cert-manager.io/docs/reference/api-docs/#cert-manager.io/v1.CertificatePrivateKey
       privateKey: {}
     # -- The Hubble server certificate and private key
@@ -1947,6 +2136,8 @@ hubble:
     prometheus:
       enabled: false
       port: 9966
+      # -- Name of the hubble-relay Prometheus container port.
+      portName: prometheus
       serviceMonitor:
         # -- Enable service monitors.
         # This requires the prometheus CRDs to be available (see https://github.com/prometheus-operator/prometheus-operator/blob/main/example/prometheus-operator-crd/monitoring.coreos.com_servicemonitors.yaml)
@@ -1955,6 +2146,9 @@ hubble:
         labels: {}
         # -- Annotations to add to ServiceMonitor hubble-relay
         annotations: {}
+        # -- Attach node metadata to the targets discovered by ServiceMonitor hubble-relay.
+        # ref: https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.AttachMetadata
+        attachMetadata: {}
         # -- Interval for scrape metrics.
         interval: "10s"
         # @schema
@@ -2367,6 +2561,15 @@ ipam:
     # refill the bucket up to the burst size capacity.
     # @default -- `4.0`
     externalAPILimitQPS: ~
+    # -- Release excess IP addresses from cloud provider interfaces.
+    releaseExcessIPs: false
+    # @schema
+    # type: [null, integer]
+    # @schema
+    # -- (int) Number of seconds the operator waits before releasing an IP
+    # address previously marked as excess.
+    # @default -- `180`
+    excessIPReleaseDelay: ~
   # -- NodeSpec configuration for the IPAM
   nodeSpec:
     # -- IPAM min allocate
@@ -2686,6 +2889,8 @@ prometheus:
   metricsService: false
   enabled: false
   port: 9962
+  # -- Name of the cilium-agent Prometheus container port.
+  portName: prometheus
   serviceMonitor:
     # -- Enable service monitors.
     # This requires the prometheus CRDs to be available (see https://github.com/prometheus-operator/prometheus-operator/blob/main/example/prometheus-operator-crd/monitoring.coreos.com_servicemonitors.yaml)
@@ -2694,6 +2899,9 @@ prometheus:
     labels: {}
     # -- Annotations to add to ServiceMonitor cilium-agent
     annotations: {}
+    # -- Attach node metadata to the targets discovered by ServiceMonitor cilium-agent.
+    # ref: https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.AttachMetadata
+    attachMetadata: {}
     # -- jobLabel to add for ServiceMonitor cilium-agent
     jobLabel: ""
     # -- Interval for scrape metrics.
@@ -2759,8 +2967,7 @@ envoy:
   # values are: "split" for the existing per-resource-type xDS,
   # "delta-split" for incremental Delta xDS,
   # "ads" for the ADS (Aggregated Discovery Service) xDS, and
-  # "strict-ads" for ADS with strict snapshot cache behavior and generated
-  # snapshot consistency checks. Null value omits setting this option.
+  # "strict-ads" as a compatibility alias for "ads". Null value omits setting this option.
   # Cilium Agent defaults missing option to "split" to keep upgrades in the legacy mode.
   # @default -- `ads` for new 1.20+ installations; none when `upgradeCompatibility` is set below `1.20`
   xdsMode: ~
@@ -2873,9 +3080,9 @@ envoy:
     # @schema
     override: ~
     repository: "quay.io/cilium/cilium-envoy"
-    tag: "v1.38.4-1789396437-a6bb974d7ad015d17b46eb44fdd7bbfe8256c089"
+    tag: "v1.40.2-1793367197-e19484665a61a41d63009f0ce1bc5cf0e218803c"
     pullPolicy: "Always"
-    digest: "sha256:39a86953505b46d8a8e1ee4add26d955d5ba1accf5e4fa60197c8155e5ac2b5e"
+    digest: "sha256:683ce70e9c67d194164a2525a1115e4b6571c0d3f5a41be6f4c07e18618538f9"
     useDigest: true
   # -- Init containers added to the cilium Envoy DaemonSet.
   initContainers: []
@@ -3085,6 +3292,9 @@ envoy:
       labels: {}
       # -- Annotations to add to ServiceMonitor cilium-envoy
       annotations: {}
+      # -- Attach node metadata to the targets discovered by ServiceMonitor cilium-envoy.
+      # ref: https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.AttachMetadata
+      attachMetadata: {}
       # -- Interval for scrape metrics.
       interval: "10s"
       # @schema
@@ -3111,6 +3321,8 @@ envoy:
       metricRelabelings: ~
     # -- Serve prometheus metrics for cilium-envoy on the configured port
     port: "9964"
+    # -- Name of the Envoy Prometheus container port, for both standalone and embedded Envoy.
+    portName: envoy-metrics
 # -- Enable/Disable use of node label based identity
 nodeSelectorLabels: false
 # To include or exclude matched resources from cilium node identity evaluation
@@ -3340,6 +3552,8 @@ operator:
       operator: Exists
     - key: "node-role.kubernetes.io/master" #deprecated
       operator: Exists
+    - key: "node-role.kubernetes.io/etcd"
+      operator: Exists
     - key: "node.kubernetes.io/not-ready"
       operator: Exists
     - key: "node.cloudprovider.kubernetes.io/uninitialized"
@@ -3441,6 +3655,8 @@ operator:
     metricsService: false
     enabled: true
     port: 9963
+    # -- Name of the cilium-operator Prometheus container port.
+    portName: prometheus
     serviceMonitor:
       # -- Enable service monitors.
       # This requires the prometheus CRDs to be available (see https://github.com/prometheus-operator/prometheus-operator/blob/main/example/prometheus-operator-crd/monitoring.coreos.com_servicemonitors.yaml)
@@ -3449,6 +3665,9 @@ operator:
       labels: {}
       # -- Annotations to add to ServiceMonitor cilium-operator
       annotations: {}
+      # -- Attach node metadata to the targets discovered by ServiceMonitor cilium-operator.
+      # ref: https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.AttachMetadata
+      attachMetadata: {}
       # -- jobLabel to add for ServiceMonitor cilium-operator
       jobLabel: ""
       # -- Interval for scrape metrics.
@@ -3528,8 +3747,8 @@ nodeinit:
     # @schema
     override: ~
     repository: "quay.io/cilium/startup-script"
-    tag: "1782916218-36ae25f"
-    digest: "sha256:f99e2beda7324e93ba04d6240d9626a6b9ab023d7d56e3b029d3d9c823ce63ef"
+    tag: "1793630414-e47a187"
+    digest: "sha256:f6d8cc0d4210ef3905631994d5b4c906d35580c9d928f778aa489f51edd2bdd6"
     useDigest: true
     pullPolicy: "Always"
   # -- The priority class to use for the nodeinit pod.
@@ -3635,9 +3854,9 @@ preflight:
       # @schema
       override: ~
       repository: "quay.io/cilium/cilium-envoy"
-      tag: "v1.38.4-1789396437-a6bb974d7ad015d17b46eb44fdd7bbfe8256c089"
+      tag: "v1.40.2-1793367197-e19484665a61a41d63009f0ce1bc5cf0e218803c"
       pullPolicy: "Always"
-      digest: "sha256:39a86953505b46d8a8e1ee4add26d955d5ba1accf5e4fa60197c8155e5ac2b5e"
+      digest: "sha256:683ce70e9c67d194164a2525a1115e4b6571c0d3f5a41be6f4c07e18618538f9"
       useDigest: true
   # -- The priority class to use for the preflight pod.
   priorityClassName: ""
@@ -4258,11 +4477,15 @@ clustermesh:
       enabled: true
       # -- Configure the port the apiserver metric server listens on.
       port: 9962
+      # -- Name of the clustermesh-apiserver metrics container port.
+      portName: apiserv-metrics
       kvstoremesh:
         # -- Enables exporting KVStoreMesh metrics in OpenMetrics format.
         enabled: true
         # -- Configure the port the KVStoreMesh metric server listens on.
         port: 9964
+        # -- Name of the KVStoreMesh metrics container port.
+        portName: kvmesh-metrics
       etcd:
         # -- Enables exporting etcd metrics in OpenMetrics format.
         enabled: true
@@ -4270,6 +4493,8 @@ clustermesh:
         mode: basic
         # -- Configure the port the etcd metric server listens on.
         port: 9963
+        # -- Name of the etcd metrics container port.
+        portName: etcd-metrics
       serviceMonitor:
         # -- Enable service monitor.
         # This requires the prometheus CRDs to be available (see https://github.com/prometheus-operator/prometheus-operator/blob/main/example/prometheus-operator-crd/monitoring.coreos.com_servicemonitors.yaml)
@@ -4278,6 +4503,9 @@ clustermesh:
         labels: {}
         # -- Annotations to add to ServiceMonitor clustermesh-apiserver
         annotations: {}
+        # -- Attach node metadata to the targets discovered by ServiceMonitor clustermesh-apiserver.
+        # ref: https://prometheus-operator.dev/docs/api-reference/api/#monitoring.coreos.com/v1.AttachMetadata
+        attachMetadata: {}
         # -- Specify the Kubernetes namespace where Prometheus expects to find
         # service monitors configured.
         # namespace: ""
@@ -4383,8 +4611,6 @@ dnsProxy:
   # overwrites the TTL with this value. Setting this value to zero means that
   # Cilium will honor the TTLs returned by the upstream DNS server.
   minTtl: 0
-  # -- DNS cache data at this path is preloaded on agent startup. (deprecated: will be removed in v1.21)
-  preCache: ""
   # -- Global port on which the in-agent DNS proxy should listen. Default 0 is a OS-assigned port.
   proxyPort: 0
   # -- The maximum time the DNS proxy holds an allowed DNS response before sending it along. Responses are sent as soon as the datapath is updated with the new IP information.
@@ -4400,182 +4626,6 @@ sctp:
   enabled: false
 # -- Enable Non-Default-Deny policies
 enableNonDefaultDenyPolicies: true
-authentication:
-  mutual:
-    # Settings for SPIRE
-    spire:
-      # -- Enable SPIRE integration (beta)
-      enabled: false
-      # -- Annotations to be added to all top-level spire objects (resources under templates/spire)
-      annotations: {}
-      # Settings to control the SPIRE installation and configuration
-      install:
-        # -- Enable SPIRE installation.
-        # This will only take effect only if authentication.mutual.spire.enabled is true
-        enabled: true
-        # -- SPIRE namespace to install into
-        namespace: cilium-spire
-        # -- SPIRE namespace already exists. Set to true if Helm should not create, manage, and import the SPIRE namespace.
-        existingNamespace: false
-        # -- init container image of SPIRE agent and server
-        initImage:
-          # @schema
-          # type: [null, string]
-          # @schema
-          override: ~
-          repository: "docker.io/library/busybox"
-          tag: "1.38.0"
-          digest: "sha256:dc2d74b28e4cf8984fa52af1f39bc7c3d9c73760b41a74d629f5d11b1ab28616"
-          useDigest: true
-          pullPolicy: "Always"
-        # SPIRE agent configuration
-        agent:
-          # -- The priority class to use for the spire agent
-          priorityClassName: ""
-          # -- SPIRE agent image
-          image:
-            # @schema
-            # type: [null, string]
-            # @schema
-            override: ~
-            repository: "ghcr.io/spiffe/spire-agent"
-            tag: "1.15.3"
-            digest: "sha256:41b0dcd8b258a69db9e2768292a060766fb76fd866e4bc925849981ea1b825ff"
-            useDigest: true
-            pullPolicy: "Always"
-          # -- SPIRE agent service account
-          serviceAccount:
-            create: true
-            name: spire-agent
-          # -- SPIRE agent annotations
-          annotations: {}
-          # -- SPIRE agent labels
-          labels: {}
-          # -- container resource limits & requests
-          resources: {}
-          # -- SPIRE Workload Attestor kubelet verification.
-          skipKubeletVerification: true
-          # -- SPIRE agent tolerations configuration
-          # By default it follows the same tolerations as the agent itself
-          # to allow the Cilium agent on this node to connect to SPIRE.
-          # ref: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
-          tolerations:
-            - key: node.kubernetes.io/not-ready
-              effect: NoSchedule
-            - key: node-role.kubernetes.io/master
-              effect: NoSchedule
-            - key: node-role.kubernetes.io/control-plane
-              effect: NoSchedule
-            - key: node.cloudprovider.kubernetes.io/uninitialized
-              effect: NoSchedule
-              value: "true"
-            - key: CriticalAddonsOnly
-              operator: "Exists"
-          # -- SPIRE agent affinity configuration
-          affinity: {}
-          # -- SPIRE agent nodeSelector configuration
-          # ref: ref: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#nodeselector
-          nodeSelector: {}
-          # -- Security context to be added to spire agent pods.
-          # SecurityContext holds pod-level security attributes and common container settings.
-          # ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
-          podSecurityContext: {}
-          # -- Security context to be added to spire agent containers.
-          # SecurityContext holds pod-level security attributes and common container settings.
-          # ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-container
-          securityContext: {}
-        server:
-          # -- The priority class to use for the spire server
-          priorityClassName: ""
-          # -- SPIRE server image
-          image:
-            # @schema
-            # type: [null, string]
-            # @schema
-            override: ~
-            repository: "ghcr.io/spiffe/spire-server"
-            tag: "1.15.3"
-            digest: "sha256:4082f30d3e0ddc4000a171392c4ea174345ee44d161ee917c70b97b2ecfba141"
-            useDigest: true
-            pullPolicy: "Always"
-          # -- SPIRE server service account
-          serviceAccount:
-            create: true
-            name: spire-server
-          # -- SPIRE server init containers
-          initContainers: []
-          # -- SPIRE server annotations
-          annotations: {}
-          # -- SPIRE server labels
-          labels: {}
-          # SPIRE server service configuration
-          # -- container resource limits & requests
-          resources: {}
-          service:
-            # -- Service type for the SPIRE server service
-            type: ClusterIP
-            # -- Annotations to be added to the SPIRE server service
-            annotations: {}
-            # -- Labels to be added to the SPIRE server service
-            labels: {}
-          # -- SPIRE server affinity configuration
-          affinity: {}
-          # -- SPIRE server nodeSelector configuration
-          # ref: ref: https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#nodeselector
-          nodeSelector: {}
-          # -- SPIRE server tolerations configuration
-          # ref: https://kubernetes.io/docs/concepts/scheduling-eviction/taint-and-toleration/
-          tolerations: []
-          # SPIRE server datastorage configuration
-          dataStorage:
-            # -- Enable SPIRE server data storage
-            enabled: true
-            # -- Size of the SPIRE server data storage
-            size: 1Gi
-            # -- Access mode of the SPIRE server data storage
-            accessMode: ReadWriteOnce
-            # @schema
-            # type: [null, string]
-            # @schema
-            # -- StorageClass of the SPIRE server data storage
-            storageClass: null
-          # -- Security context to be added to spire server pods.
-          # SecurityContext holds pod-level security attributes and common container settings.
-          # ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-pod
-          podSecurityContext: {}
-          # -- Security context to be added to spire server containers.
-          # SecurityContext holds pod-level security attributes and common container settings.
-          # ref: https://kubernetes.io/docs/tasks/configure-pod-container/security-context/#set-the-security-context-for-a-container
-          securityContext: {}
-          # SPIRE CA configuration
-          ca:
-            # -- SPIRE CA key type
-            # AWS requires the use of RSA. EC cryptography is not supported
-            keyType: "rsa-4096"
-            # -- SPIRE CA Subject
-            subject:
-              country: "US"
-              organization: "SPIRE"
-              commonName: "Cilium SPIRE CA"
-      # @schema
-      # type: [null, string]
-      # @schema
-      # -- SPIRE server address used by Cilium Operator
-      #
-      # If k8s Service DNS along with port number is used (e.g. <service-name>.<namespace>.svc(.*):<port-number> format),
-      # Cilium Operator will resolve its address by looking up the clusterIP from Service resource.
-      #
-      # Example values: 10.0.0.1:8081, spire-server.cilium-spire.svc:8081
-      serverAddress: ~
-      # -- SPIFFE trust domain to use for fetching certificates
-      trustDomain: spiffe.cilium
-      # -- SPIRE socket path where the SPIRE delegated api agent is listening
-      adminSocketPath: /run/spire/sockets/admin.sock
-      # -- SPIRE socket path where the SPIRE workload agent is listening.
-      # Applies to both the Cilium Agent and Operator
-      agentSocketPath: /run/spire/sockets/agent/agent.sock
-      # -- SPIRE connection timeout
-      connectionTimeout: 30s
 # -- Enable Internal Traffic Policy
 enableInternalTrafficPolicy: true
 # -- Enable LoadBalancer IP Address Management

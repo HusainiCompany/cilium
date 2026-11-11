@@ -5,12 +5,12 @@
 
 #define ENABLE_IPV4			1
 #define ENABLE_IPV6			1
-#define ENABLE_NODEPORT			1
-#define ENABLE_DSR			1
-#define DSR_ENCAP_GENEVE		3
-
-#define ENABLE_NODEPORT_ACCELERATION	1
+#define DSR_ENCAP_MODE			DSR_ENCAP_NONE
 
 #define TEST_DSR_OPT_NETWORK_BYTE_ORDER
 
 #include "kpr_dsr_lb.h"
+
+ASSIGN_CONFIG(bool, enable_ipv4, true)
+ASSIGN_CONFIG(bool, enable_nodeport_acceleration, true)
+ASSIGN_CONFIG(bool, enable_nodeport, true)
